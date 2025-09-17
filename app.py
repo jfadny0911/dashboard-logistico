@@ -117,53 +117,96 @@ elif menu == "KPIs":
         st.error(f"Error: {e}")
 
 
-# 🚚 Predicción de Rutas simuladas
+# 🚚 Predicción de Rutas basada en ML con ajuste por clima y tráfico
 elif menu == "Predicción de Rutas":
-    st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
+    st.header("🚚 Predicción de Rutas en El Salvador (ML + Ajuste Clima/Tráfico)")
 
-    # Coordenadas aproximadas de zonas principales
-    zonas = {
-        "San Salvador": [13.6929, -89.2182],
-        "Santa Ana": [13.9942, -89.5598],
-        "San Miguel": [13.4833, -88.1833],
-        "La Libertad": [13.4886, -89.3222]
-    }
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM excel_data"))
+            data = [dict(row) for row in result.mappings()]
 
-    # Selección de origen y destino
-    origen = st.selectbox("Selecciona zona de origen", list(zonas.keys()))
-    destino = st.selectbox("Selecciona zona de destino", list(zonas.keys()))
+        if not data:
+            st.warning("No hay datos suficientes para predecir rutas. Por favor sube un Excel primero.")
+        else:
+            df = pd.DataFrame(data)
 
-    if origen != destino:
-        # Crear mapa
-        mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
+            # Columnas necesarias
+            required_cols = ["zona", "tipo_pedido", "clima", "trafico", "tiempo_entrega"]
+            if not all(col in df.columns for col in required_cols):
+                st.error(f"El dataset debe contener las columnas: {required_cols}")
+            else:
+                from sklearn.model_selection import train_test_split
+                from sklearn.ensemble import RandomForestRegressor
+                from sklearn.metrics import mean_absolute_error
 
-        # Marcar puntos
-        folium.Marker(zonas[origen], popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-        folium.Marker(zonas[destino], popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+                # Preparar datos
+                df_ml = pd.get_dummies(df[required_cols].dropna(), drop_first=True)
+                X = df_ml.drop(columns=["tiempo_entrega"])
+                y = df_ml["tiempo_entrega"]
 
-        # Ruta simulada (con ruido aleatorio)
-        lat1, lon1 = zonas[origen]
-        lat2, lon2 = zonas[destino]
-        puntos = [
-            [lat1 + random.uniform(-0.05, 0.05), lon1 + random.uniform(-0.05, 0.05)],
-            [(lat1+lat2)/2 + random.uniform(-0.05, 0.05), (lon1+lon2)/2 + random.uniform(-0.05, 0.05)],
-            [lat2 + random.uniform(-0.05, 0.05), lon2 + random.uniform(-0.05, 0.05)]
-        ]
-        folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
+                # Entrenar modelo
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                model = RandomForestRegressor(n_estimators=100, random_state=42)
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                mae = mean_absolute_error(y_test, y_pred)
+                st.info(f"MAE del modelo: {round(mae,2)} min (error promedio en test)")
 
-        # Mostrar mapa
-        st_folium(mapa, width=700, height=500)
+                # Selección de ruta
+                zonas = df["zona"].unique()
+                origen = st.selectbox("Selecciona zona de origen", zonas)
+                destino = st.selectbox("Selecciona zona de destino", zonas)
 
-        # Predicción de tiempo ficticio
-        tiempo_estimado = random.randint(30, 120)  # en minutos
-        trafico = random.choice(["🚦 Bajo", "🚦 Medio", "🚦 Alto"])
-        clima = random.choice(["☀️ Soleado", "🌧️ Lluvioso", "🌥️ Nublado"])
+                if origen != destino:
+                    tipo_pedido = st.selectbox("Selecciona tipo de pedido", df["tipo_pedido"].unique())
+                    clima = st.selectbox("Selecciona clima", df["clima"].unique())
+                    trafico = st.selectbox("Selecciona tráfico", df["trafico"].unique())
 
-        st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-        st.info(f"Condiciones: {trafico} | {clima}")
+                    # Crear DataFrame para predicción
+                    nuevo = pd.DataFrame([[origen, tipo_pedido, clima, trafico]],
+                                         columns=["zona", "tipo_pedido", "clima", "trafico"])
+                    nuevo_ml = pd.get_dummies(nuevo)
+                    nuevo_ml = nuevo_ml.reindex(columns=X.columns, fill_value=0)
+                    pred_base = model.predict(nuevo_ml)[0]
 
-    else:
-        st.warning("El origen y destino no pueden ser iguales.")
+                    # Ajuste por tráfico y clima
+                    trafico_factor = {"🚦 Bajo": 1.0, "🚦 Medio": 1.15, "🚦 Alto": 1.3}
+                    clima_factor = {"☀️ Soleado": 1.0, "🌥️ Nublado": 1.1, "🌧️ Lluvioso": 1.25}
+
+                    pred_ajustada = pred_base * trafico_factor[trafico] * clima_factor[clima]
+
+                    st.success(f"⏱️ Tiempo estimado de entrega: {round(pred_ajustada,2)} minutos")
+                    st.info(f"Condiciones seleccionadas: {trafico} | {clima}")
+
+                    # Mostrar ruta simulada en mapa
+                    coords = {
+                        "San Salvador": [13.6929, -89.2182],
+                        "Santa Ana": [13.9942, -89.5598],
+                        "San Miguel": [13.4833, -88.1833],
+                        "La Libertad": [13.4886, -89.3222]
+                    }
+                    mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
+                    folium.Marker(coords[origen], popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
+                    folium.Marker(coords[destino], popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+
+                    # Ruta simulada
+                    lat1, lon1 = coords[origen]
+                    lat2, lon2 = coords[destino]
+                    puntos = [
+                        [lat1 + random.uniform(-0.03, 0.03), lon1 + random.uniform(-0.03, 0.03)],
+                        [(lat1+lat2)/2 + random.uniform(-0.03, 0.03), (lon1+lon2)/2 + random.uniform(-0.03, 0.03)],
+                        [lat2 + random.uniform(-0.03, 0.03), lon2 + random.uniform(-0.03, 0.03)]
+                    ]
+                    folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
+                    st_folium(mapa, width=700, height=500)
+
+                else:
+                    st.warning("El origen y destino no pueden ser iguales.")
+
+    except Exception as e:
+        st.error(f"Error al cargar datos o entrenar modelo: {e}")
+
 
 
 # 🗑️ Borrar Datos
