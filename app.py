@@ -1,175 +1,180 @@
+import os
 import streamlit as st
 import pandas as pd
+from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
 from streamlit_folium import st_folium
-import io
-import os
-from sqlalchemy import create_engine, text
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import random
 
-# ============================================================
-# 🔗 Conexión a PostgreSQL
-# ============================================================
-DATABASE_URL = "postgresql+psycopg2://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
+# ===============================
+# 🔗 Conexión a la base de datos
+# ===============================
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
+)
+engine = create_engine(DATABASE_URL)
 
-try:
-    engine = create_engine(DATABASE_URL)
-    with engine.connect() as conn:
-        test = conn.execute(text("SELECT 1")).scalar()
-        st.success(f"✅ Conexión a PostgreSQL establecida (SELECT 1 = {test})")
-except Exception as e:
-    st.error("❌ Error al conectar a la base de datos:")
-    st.text(str(e))
-    st.stop()
+# Configuración de página
+st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
+st.title("📦 Dashboard Predictivo - ChivoFast")
 
-# ============================================================
-# 📥 Cargar datos desde la BD
-# ============================================================
-@st.cache_data
-def load_data():
-    query = """
-        SELECT id_entrega, zona, tipo_pedido, clima, trafico, tiempo_entrega, retraso, fecha
-        FROM entregas
-        WHERE zona IN ('San Salvador','San Miguel','Santa Ana','La Libertad')
-    """
-    return pd.read_sql(query, engine)
+# ===============================
+# 📋 Menú lateral
+# ===============================
+menu = st.sidebar.radio("Menú", ["Subir Excel", "Ver Datos", "KPIs", "Predicción de Rutas", "Borrar Datos"])
 
-df = load_data()
 
-# ============================================================
-# 🖥 Interfaz Streamlit
-# ============================================================
-st.header("📦 Dashboard Predictivo de Entregas - ChivoFast")
-st.markdown("Análisis, predicción y gestión de entregas en El Salvador con datos de PostgreSQL.")
+# 📤 Subir Excel
+if menu == "Subir Excel":
+    st.header("📤 Subir archivo Excel")
+    uploaded_file = st.file_uploader("Selecciona un archivo Excel", type=["xlsx", "xls"])
 
-if not df.empty:
-    # ============================================================
-    # 📌 KPIs
-    # ============================================================
-    st.subheader("📌 Indicadores Clave (KPIs)")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Promedio de Entrega (min)", round(df["tiempo_entrega"].mean(), 2))
-    col2.metric("Retraso Promedio (min)", round(df["retraso"].mean(), 2))
-    col3.metric("Total de Entregas", len(df))
+    if uploaded_file is not None:
+        try:
+            df = pd.read_excel(uploaded_file)
+            st.write("✅ Vista previa:")
+            st.dataframe(df.head())
 
-    # ============================================================
-    # 📊 Diagramas
-    # ============================================================
-    st.subheader("📍 Distribución de Entregas por Zona")
-    st.plotly_chart(px.histogram(df, x="zona", color="zona", title="Número de Entregas por Zona"))
+            if st.button("Guardar en BD"):
+                with engine.begin() as conn:
+                    df.to_sql("excel_data", conn, if_exists="append", index=False)
+                st.success(f"Archivo {uploaded_file.name} cargado con {len(df)} filas.")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-    st.subheader("🚦 Impacto del Tráfico en Tiempo de Entrega")
-    st.plotly_chart(px.box(df, x="trafico", y="tiempo_entrega", color="trafico"))
 
-    st.subheader("🌦️ Impacto del Clima en Tiempo de Entrega")
-    st.plotly_chart(px.box(df, x="clima", y="tiempo_entrega", color="clima"))
+# 📋 Ver Datos
+elif menu == "Ver Datos":
+    st.header("📋 Datos almacenados")
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM excel_data LIMIT 200"))
+            data = [dict(row) for row in result.mappings()]
 
-    # ============================================================
-    # 🗺 Mapa de El Salvador (simulado)
-    # ============================================================
-    st.subheader("🗺 Mapa de El Salvador con Zonas de Entregas")
-    mapa = folium.Map(location=[13.7, -89.2], zoom_start=7)
+        if data:
+            df = pd.DataFrame(data)
+            st.dataframe(df)
 
-    zonas_coords = {
+            # Descargar en CSV
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Descargar datos en CSV", csv, "datos.csv", "text/csv")
+        else:
+            st.info("No hay datos en la tabla.")
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
+# 📈 KPIs y Dashboard estilo BI
+elif menu == "KPIs":
+    st.header("📈 Indicadores Clave (KPIs)")
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM excel_data"))
+            data = [dict(row) for row in result.mappings()]
+
+        if data:
+            df = pd.DataFrame(data)
+
+            total_registros = len(df)
+
+            # Tarjetas principales
+            col1, col2, col3 = st.columns(3)
+            col1.metric("📊 Total registros", total_registros)
+            if not df.select_dtypes(include="number").empty:
+                col2.metric("🔹 Promedio global", round(df.select_dtypes(include="number").mean().mean(), 2))
+                col3.metric("📈 Máximo global", round(df.select_dtypes(include="number").max().max(), 2))
+
+            # Gráficas de columnas numéricas
+            if not df.select_dtypes(include="number").empty:
+                st.subheader("📊 Gráficas interactivas")
+                numeric_cols = df.select_dtypes(include="number").columns
+
+                # Gráfica de barras
+                df_sum = df[numeric_cols].sum().reset_index()
+                df_sum.columns = ["Columna", "Suma"]
+                fig_bar = px.bar(df_sum, x="Columna", y="Suma", title="Suma por columna", color="Columna")
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+                # Gráfica de líneas
+                df_avg = df[numeric_cols].mean().reset_index()
+                df_avg.columns = ["Columna", "Promedio"]
+                fig_line = px.line(df_avg, x="Columna", y="Promedio", title="Promedio por columna", markers=True)
+                st.plotly_chart(fig_line, use_container_width=True)
+
+            # Gráfica de pastel para categóricas
+            cat_cols = df.select_dtypes(include="object").columns
+            if len(cat_cols) > 0:
+                st.subheader("🥧 Distribución categórica")
+                col_select = st.selectbox("Selecciona columna categórica", cat_cols)
+                fig_pie = px.pie(df, names=col_select, title=f"Distribución de {col_select}")
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        else:
+            st.info("No hay datos para calcular KPIs.")
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
+# 🚚 Predicción de Rutas simuladas
+elif menu == "Predicción de Rutas":
+    st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
+
+    # Coordenadas aproximadas de zonas principales
+    zonas = {
         "San Salvador": [13.6929, -89.2182],
+        "Santa Ana": [13.9942, -89.5598],
         "San Miguel": [13.4833, -88.1833],
-        "Santa Ana": [13.9942, -89.5597],
-        "La Libertad": [13.4883, -89.3222]
+        "La Libertad": [13.4886, -89.3222]
     }
 
-    for _, row in df.iterrows():
-        coords = zonas_coords.get(row["zona"], [13.7, -89.2])
-        popup = f"📍 {row['zona']}<br>🚚 Pedido: {row['tipo_pedido']}<br>🌦 Clima: {row['clima']}<br>🚦 Tráfico: {row['trafico']}<br>⏱ Tiempo: {row['tiempo_entrega']} min"
-        folium.Marker(location=coords, popup=popup, icon=folium.Icon(color="blue")).add_to(mapa)
+    # Selección de origen y destino
+    origen = st.selectbox("Selecciona zona de origen", list(zonas.keys()))
+    destino = st.selectbox("Selecciona zona de destino", list(zonas.keys()))
 
-    st_folium(mapa, width=700)
+    if origen != destino:
+        # Crear mapa
+        mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
 
-    # ============================================================
-    # 🤖 Modelo de Predicción
-    # ============================================================
-    st.subheader("🤖 Predicción de Tiempo de Entrega")
+        # Marcar puntos
+        folium.Marker(zonas[origen], popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
+        folium.Marker(zonas[destino], popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
 
-    # Preparación de datos
-    df_ml = pd.get_dummies(df.drop(columns=["id_entrega", "fecha"]), drop_first=True)
-    X = df_ml.drop(columns=["tiempo_entrega"])
-    y = df_ml["tiempo_entrega"]
+        # Ruta simulada (con ruido aleatorio)
+        lat1, lon1 = zonas[origen]
+        lat2, lon2 = zonas[destino]
+        puntos = [
+            [lat1 + random.uniform(-0.05, 0.05), lon1 + random.uniform(-0.05, 0.05)],
+            [(lat1+lat2)/2 + random.uniform(-0.05, 0.05), (lon1+lon2)/2 + random.uniform(-0.05, 0.05)],
+            [lat2 + random.uniform(-0.05, 0.05), lon2 + random.uniform(-0.05, 0.05)]
+        ]
+        folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+        # Mostrar mapa
+        st_folium(mapa, width=700, height=500)
 
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = mean_squared_error(y_test, y_pred, squared=False)
-    r2 = r2_score(y_test, y_pred)
+        # Predicción de tiempo ficticio
+        tiempo_estimado = random.randint(30, 120)  # en minutos
+        trafico = random.choice(["🚦 Bajo", "🚦 Medio", "🚦 Alto"])
+        clima = random.choice(["☀️ Soleado", "🌧️ Lluvioso", "🌥️ Nublado"])
 
-    st.write("📊 Resultados del Modelo:")
-    st.write(f"MAE: {round(mae,2)} | RMSE: {round(rmse,2)} | R²: {round(r2,2)}")
+        st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
+        st.info(f"Condiciones: {trafico} | {clima}")
 
-    # Estimar un nuevo pedido
-    st.subheader("🔮 Estimar un nuevo pedido")
-    zona = st.selectbox("Zona", df["zona"].unique())
-    tipo_pedido = st.selectbox("Tipo de pedido", df["tipo_pedido"].unique())
-    clima = st.selectbox("Clima", df["clima"].unique())
-    trafico = st.selectbox("Tráfico", df["trafico"].unique())
-    retraso = st.slider("Retraso estimado (min)", 0, 30, 5)
-
-    nuevo = pd.DataFrame([[zona, tipo_pedido, clima, trafico, retraso]],
-                         columns=["zona", "tipo_pedido", "clima", "trafico", "retraso"])
-    nuevo_ml = pd.get_dummies(nuevo)
-    nuevo_ml = nuevo_ml.reindex(columns=X.columns, fill_value=0)
-    prediccion = model.predict(nuevo_ml)[0]
-
-    st.success(f"⏱️ Tiempo estimado de entrega: {round(prediccion,2)} minutos")
-
-    # ============================================================
-    # 📂 Archivos (Subir y Borrar)
-    # ============================================================
-    st.subheader("📂 Archivos")
-    UPLOAD_DIR = "archivos_subidos"
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-    # Subir archivos
-    uploaded_files = st.file_uploader("Subir archivos", accept_multiple_files=True)
-    if uploaded_files:
-        for file in uploaded_files:
-            with open(os.path.join(UPLOAD_DIR, file.name), "wb") as f:
-                f.write(file.getbuffer())
-        st.success("✅ Archivos subidos correctamente.")
-
-    # Listar archivos existentes
-    archivos = os.listdir(UPLOAD_DIR)
-    if archivos:
-        st.write("📑 Archivos disponibles:")
-        for archivo in archivos:
-            st.write(f"- {archivo}")
-
-        # Opción de borrar
-        archivo_borrar = st.selectbox("Seleccionar archivo a borrar", archivos)
-        if st.button("🗑 Borrar archivo"):
-            os.remove(os.path.join(UPLOAD_DIR, archivo_borrar))
-            st.success(f"✅ Archivo '{archivo_borrar}' borrado con éxito.")
     else:
-        st.info("No hay archivos disponibles.")
+        st.warning("El origen y destino no pueden ser iguales.")
 
-    # ============================================================
-    # ⬇️ Exportar datos en Excel
-    # ============================================================
-    def to_excel(df):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="Entregas")
-        return output.getvalue()
 
-    st.download_button(
-        label="⬇️ Descargar datos en Excel",
-        data=to_excel(df),
-        file_name="entregas.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+# 🗑️ Borrar Datos
+elif menu == "Borrar Datos":
+    st.header("🗑️ Eliminar registros")
+    st.warning("⚠️ Esto borrará todos los datos de la tabla `excel_data`.")
 
-else:
-    st.warning("⚠️ No se encontraron datos en la base de datos.")
+    if st.button("Borrar TODO"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM excel_data"))
+            st.success("✅ Todos los datos fueron eliminados.")
+        except Exception as e:
+            st.error(f"Error: {e}")
