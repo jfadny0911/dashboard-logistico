@@ -3,148 +3,176 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 import random
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
-from sqlalchemy import create_engine, text
-import os
+import io
+import plotly.express as px
 
 st.set_page_config(page_title="Dashboard Logístico - ChivoFast", layout="wide")
 
 # ===============================
-# Inicializar df vacío
+# Carpetas
+# ===============================
+UPLOAD_DIR = "uploaded_files"
+HISTORICO_DIR = "historico"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(HISTORICO_DIR, exist_ok=True)
+
+HIST_ENTREGAS = os.path.join(HISTORICO_DIR, "historico_entregas.xlsx")
+HIST_PREDICCIONES = os.path.join(HISTORICO_DIR, "historico_predicciones.xlsx")
+
+# ===============================
+# Inicializar df
 # ===============================
 df = pd.DataFrame()
+if os.path.exists(HIST_ENTREGAS):
+    df = pd.read_excel(HIST_ENTREGAS)
 
 # ===============================
-# Sidebar: subir/borrar archivo Excel
+# Sidebar: subir / borrar Excel
 # ===============================
-st.sidebar.header("📥 Cargar/Eliminar Datos")
+st.sidebar.header("📥 Subir / Eliminar archivos")
 uploaded_file = st.sidebar.file_uploader("Sube un archivo Excel", type=["xlsx"])
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
-    st.sidebar.success(f"✅ Archivo cargado: {len(df)} filas")
+    df_nuevo = pd.read_excel(uploaded_file)
+    # Guardar archivo original
+    file_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    st.sidebar.success(f"✅ Archivo guardado: {uploaded_file.name}")
 
-if st.sidebar.button("🗑 Borrar datos cargados"):
-    df = pd.DataFrame()
-    st.sidebar.warning("⚠️ Datos borrados")
+    # Concatenar al histórico
+    df = pd.concat([df, df_nuevo], ignore_index=True)
+    df.to_excel(HIST_ENTREGAS, index=False)
+    st.sidebar.info(f"Histórico actualizado: {len(df)} filas")
 
-# ===============================
-# Conexión opcional a PostgreSQL
-# ===============================
-DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL:
-    try:
-        engine = create_engine(DATABASE_URL)
-        st.sidebar.success("✅ Conectado a PostgreSQL")
-        try:
-            df_db = pd.read_sql("SELECT * FROM excel_data", engine)
-            if not df_db.empty:
-                df = df_db
-                st.sidebar.info(f"Datos cargados desde DB: {len(df)} filas")
-        except:
-            st.sidebar.warning("⚠️ No se pudo cargar datos de DB")
-    except Exception as e:
-        st.sidebar.error(f"❌ Error al conectar DB: {e}")
+# Listar archivos guardados
+st.sidebar.subheader("Archivos subidos")
+files_list = os.listdir(UPLOAD_DIR)
+for f in files_list:
+    st.sidebar.write(f)
+    if st.sidebar.button(f"🗑 Borrar {f}"):
+        os.remove(os.path.join(UPLOAD_DIR, f))
+        st.sidebar.warning(f"⚠️ Archivo {f} borrado")
 
 # ===============================
-# Dashboard Principal
+# Dashboard principal
 # ===============================
 st.title("📦 Dashboard Logístico - ChivoFast")
-st.markdown("Análisis y predicción de tiempos de entrega usando Inteligencia Artificial")
+st.markdown("Análisis, predicción de tiempos de entrega y registro histórico")
 
-# ===============================
-# KPIs
-# ===============================
 if not df.empty:
-    st.subheader("📌 Indicadores Clave (KPIs)")
+    # ===============================
+    # KPIs
+    # ===============================
+    st.subheader("📌 KPIs")
 
-    # Factores de ajuste
     trafico_factor = {"🚦 Bajo": 1.0, "🚦 Medio": 1.15, "🚦 Alto": 1.3}
     clima_factor = {"☀️ Soleado": 1.0, "🌥️ Nublado": 1.1, "🌧️ Lluvioso": 1.25}
 
-    # Ajuste de tiempo
     df["tiempo_ajustado"] = df["tiempo_entrega"] * df["trafico"].map(trafico_factor) * df["clima"].map(clima_factor)
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Promedio de Entrega (min)", round(df["tiempo_entrega"].mean(), 2))
-    col2.metric("Promedio Ajustado (min)", round(df["tiempo_ajustado"].mean(), 2))
-    col3.metric("Retraso Promedio (min)", round(df["retraso"].mean(), 2))
-    col4.metric("Total de Entregas", len(df))
+    promedio = df["tiempo_entrega"].mean()
+    promedio_aj = df["tiempo_ajustado"].mean()
+    retraso_prom = df["retraso"].mean()
+    total_entregas = len(df)
+    min_aj = df["tiempo_ajustado"].min()
+    max_aj = df["tiempo_ajustado"].max()
 
-    col5, col6 = st.columns(2)
-    col5.metric("Entrega más rápida (ajustada)", round(df["tiempo_ajustado"].min(), 2))
-    col6.metric("Entrega más larga (ajustada)", round(df["tiempo_ajustado"].max(), 2))
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1.metric("Promedio", round(promedio,2))
+    col2.metric("Promedio Ajustado", round(promedio_aj,2))
+    col3.metric("Retraso Promedio", round(retraso_prom,2))
+    col4.metric("Total Entregas", total_entregas)
+    col5.metric("Entrega más rápida", round(min_aj,2))
+    col6.metric("Entrega más larga", round(max_aj,2))
 
     # ===============================
-    # Predicción de Rutas ML + Ajustes
+    # Gráficos de distribución
     # ===============================
-    st.subheader("🚚 Predicción de Rutas (ML + Clima/Tráfico)")
+    st.subheader("📊 Distribución de Entregas")
+    fig1 = px.histogram(df, x="zona", color="tipo_pedido", title="Número de entregas por zona y tipo de pedido")
+    st.plotly_chart(fig1, use_container_width=True)
 
-    try:
-        required_cols = ["zona", "tipo_pedido", "clima", "trafico", "tiempo_entrega"]
-        if all(col in df.columns for col in required_cols):
-            df_ml = pd.get_dummies(df[required_cols].dropna(), drop_first=True)
-            X = df_ml.drop(columns=["tiempo_entrega"])
-            y = df_ml["tiempo_entrega"]
+    fig2 = px.box(df, x="trafico", y="tiempo_entrega", color="clima", title="Impacto de tráfico y clima en tiempo de entrega")
+    st.plotly_chart(fig2, use_container_width=True)
 
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-            model = RandomForestRegressor(n_estimators=100, random_state=42)
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
-            mae = mean_absolute_error(y_test, y_pred)
-            st.info(f"MAE del modelo: {round(mae,2)} min (error promedio en test)")
+    # ===============================
+    # Predicción de rutas ML
+    # ===============================
+    st.subheader("🚚 Predicción de Rutas")
 
-            # Selección de ruta
-            zonas = df["zona"].unique()
-            origen = st.selectbox("Selecciona zona de origen", zonas)
-            destino = st.selectbox("Selecciona zona de destino", zonas)
+    required_cols = ["zona","tipo_pedido","clima","trafico","tiempo_entrega"]
+    if all(col in df.columns for col in required_cols):
+        df_ml = pd.get_dummies(df[required_cols].dropna(), drop_first=True)
+        X = df_ml.drop(columns=["tiempo_entrega"])
+        y = df_ml["tiempo_entrega"]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        mae = mean_absolute_error(y_test, y_pred)
+        st.info(f"MAE del modelo: {round(mae,2)} min")
 
-            if origen != destino:
-                tipo_pedido = st.selectbox("Selecciona tipo de pedido", df["tipo_pedido"].unique())
-                clima_sel = st.selectbox("Selecciona clima", df["clima"].unique())
-                trafico_sel = st.selectbox("Selecciona tráfico", df["trafico"].unique())
+        zonas = df["zona"].unique()
+        origen = st.selectbox("Origen", zonas)
+        destino = st.selectbox("Destino", zonas)
+        if origen != destino:
+            tipo_pedido = st.selectbox("Tipo de pedido", df["tipo_pedido"].unique())
+            clima_sel = st.selectbox("Clima", df["clima"].unique())
+            trafico_sel = st.selectbox("Tráfico", df["trafico"].unique())
 
-                nuevo = pd.DataFrame([[origen, tipo_pedido, clima_sel, trafico_sel]],
-                                     columns=["zona", "tipo_pedido", "clima", "trafico"])
-                nuevo_ml = pd.get_dummies(nuevo)
-                nuevo_ml = nuevo_ml.reindex(columns=X.columns, fill_value=0)
-                pred_base = model.predict(nuevo_ml)[0]
+            nuevo = pd.DataFrame([[origen,tipo_pedido,clima_sel,trafico_sel]],
+                                 columns=["zona","tipo_pedido","clima","trafico"])
+            nuevo_ml = pd.get_dummies(nuevo)
+            nuevo_ml = nuevo_ml.reindex(columns=X.columns, fill_value=0)
+            pred_base = model.predict(nuevo_ml)[0]
+            pred_ajustada = pred_base * trafico_factor[trafico_sel] * clima_factor[clima_sel]
+            st.success(f"⏱️ Tiempo estimado: {round(pred_ajustada,2)} min")
+            st.info(f"Condiciones: {trafico_sel} | {clima_sel}")
 
-                # Ajuste
-                pred_ajustada = pred_base * trafico_factor[trafico_sel] * clima_factor[clima_sel]
-                st.success(f"⏱️ Tiempo estimado de entrega: {round(pred_ajustada,2)} minutos")
-                st.info(f"Condiciones seleccionadas: {trafico_sel} | {clima_sel}")
+            # ===============================
+            # Guardar predicción histórica
+            # ===============================
+            df_pred = pd.DataFrame({
+                "Origen":[origen],
+                "Destino":[destino],
+                "Tipo Pedido":[tipo_pedido],
+                "Clima":[clima_sel],
+                "Tráfico":[trafico_sel],
+                "Tiempo Estimado":[round(pred_ajustada,2)]
+            })
 
-                # Mapa de ruta simulada
-                coords = {
-                    "San Salvador": [13.6929, -89.2182],
-                    "Santa Ana": [13.9942, -89.5598],
-                    "San Miguel": [13.4833, -88.1833],
-                    "La Libertad": [13.4886, -89.3222]
-                }
-                mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                folium.Marker(coords[origen], popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-                folium.Marker(coords[destino], popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+            if os.path.exists(HIST_PREDICCIONES):
+                df_hist_pred = pd.read_excel(HIST_PREDICCIONES)
+                df_pred = pd.concat([df_hist_pred, df_pred], ignore_index=True)
+            df_pred.to_excel(HIST_PREDICCIONES, index=False)
 
-                lat1, lon1 = coords[origen]
-                lat2, lon2 = coords[destino]
-                puntos = [
-                    [lat1 + random.uniform(-0.03, 0.03), lon1 + random.uniform(-0.03, 0.03)],
-                    [(lat1+lat2)/2 + random.uniform(-0.03, 0.03), (lon1+lon2)/2 + random.uniform(-0.03, 0.03)],
-                    [lat2 + random.uniform(-0.03, 0.03), lon2 + random.uniform(-0.03, 0.03)]
-                ]
-                folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
-                st_folium(mapa, width=700, height=500)
-
-            else:
-                st.warning("El origen y destino no pueden ser iguales.")
+            st.download_button("⬇️ Descargar predicción en Excel", data=df_pred.to_excel(index=False),
+                               file_name="historico_predicciones.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         else:
-            st.warning(f"El dataset debe contener las columnas: {required_cols}")
+            st.warning("Origen y destino no pueden ser iguales.")
+    else:
+        st.warning(f"El dataset debe contener: {required_cols}")
 
-    except Exception as e:
-        st.error(f"Error al entrenar modelo o predecir rutas: {e}")
+    # ===============================
+    # Descargar histórico completo de entregas
+    # ===============================
+    with open(HIST_ENTREGAS, "rb") as f:
+        st.download_button("⬇️ Descargar histórico de entregas", data=f,
+                           file_name="historico_entregas.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # Descargar histórico completo de predicciones
+    if os.path.exists(HIST_PREDICCIONES):
+        with open(HIST_PREDICCIONES, "rb") as f:
+            st.download_button("⬇️ Descargar histórico de predicciones", data=f,
+                               file_name="historico_predicciones.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 else:
-    st.warning("⚠️ No hay datos cargados. Sube un Excel o conecta la base de datos.")
+    st.warning("⚠️ No hay datos cargados. Sube un Excel para comenzar.")
