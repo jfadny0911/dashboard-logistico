@@ -1,9 +1,7 @@
-streamlit
-sqlalchemy
-psycopg2-binary
-pandas
-openpyxl
-plotly
-folium
-streamlit-folium
-
+streamlit==1.27.0
+pandas==2.1.0
+folium==0.18.3
+streamlit-folium==0.11.0
+scikit-learn==1.3.0
+openpyxl==3.1.2
+SQLAlchemy==2.0.21
