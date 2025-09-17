@@ -6,9 +6,12 @@ from streamlit_folium import st_folium
 import io
 import os
 from sqlalchemy import create_engine, text
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # ============================================================
-# 🔗 Configuración de conexión a PostgreSQL
+# 🔗 Conexión a PostgreSQL
 # ============================================================
 DATABASE_URL = "postgresql+psycopg2://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
 
@@ -28,7 +31,7 @@ except Exception as e:
 @st.cache_data
 def load_data():
     query = """
-        SELECT zona, tipo_pedido, clima, trafico, tiempo_entrega, retraso, fecha
+        SELECT id_entrega, zona, tipo_pedido, clima, trafico, tiempo_entrega, retraso, fecha
         FROM entregas
         WHERE zona IN ('San Salvador','San Miguel','Santa Ana','La Libertad')
     """
@@ -40,7 +43,7 @@ df = load_data()
 # 🖥 Interfaz Streamlit
 # ============================================================
 st.header("📦 Dashboard Predictivo de Entregas - ChivoFast")
-st.markdown("Análisis y predicción de tiempos de entrega en El Salvador con datos de la base de datos PostgreSQL.")
+st.markdown("Análisis, predicción y gestión de entregas en El Salvador con datos de PostgreSQL.")
 
 if not df.empty:
     # ============================================================
@@ -83,6 +86,44 @@ if not df.empty:
         folium.Marker(location=coords, popup=popup, icon=folium.Icon(color="blue")).add_to(mapa)
 
     st_folium(mapa, width=700)
+
+    # ============================================================
+    # 🤖 Modelo de Predicción
+    # ============================================================
+    st.subheader("🤖 Predicción de Tiempo de Entrega")
+
+    # Preparación de datos
+    df_ml = pd.get_dummies(df.drop(columns=["id_entrega", "fecha"]), drop_first=True)
+    X = df_ml.drop(columns=["tiempo_entrega"])
+    y = df_ml["tiempo_entrega"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    mae = mean_absolute_error(y_test, y_pred)
+    rmse = mean_squared_error(y_test, y_pred, squared=False)
+    r2 = r2_score(y_test, y_pred)
+
+    st.write("📊 Resultados del Modelo:")
+    st.write(f"MAE: {round(mae,2)} | RMSE: {round(rmse,2)} | R²: {round(r2,2)}")
+
+    # Estimar un nuevo pedido
+    st.subheader("🔮 Estimar un nuevo pedido")
+    zona = st.selectbox("Zona", df["zona"].unique())
+    tipo_pedido = st.selectbox("Tipo de pedido", df["tipo_pedido"].unique())
+    clima = st.selectbox("Clima", df["clima"].unique())
+    trafico = st.selectbox("Tráfico", df["trafico"].unique())
+    retraso = st.slider("Retraso estimado (min)", 0, 30, 5)
+
+    nuevo = pd.DataFrame([[zona, tipo_pedido, clima, trafico, retraso]],
+                         columns=["zona", "tipo_pedido", "clima", "trafico", "retraso"])
+    nuevo_ml = pd.get_dummies(nuevo)
+    nuevo_ml = nuevo_ml.reindex(columns=X.columns, fill_value=0)
+    prediccion = model.predict(nuevo_ml)[0]
+
+    st.success(f"⏱️ Tiempo estimado de entrega: {round(prediccion,2)} minutos")
 
     # ============================================================
     # 📂 Archivos (Subir y Borrar)
@@ -132,4 +173,3 @@ if not df.empty:
 
 else:
     st.warning("⚠️ No se encontraron datos en la base de datos.")
-
