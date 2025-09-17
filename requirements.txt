@@ -1,0 +1,10 @@
+streamlit
+pandas
+sqlalchemy
+psycopg2-binary
+plotly
+scikit-learn
+openpyxl
+folium
+requests
+xlsxwriter

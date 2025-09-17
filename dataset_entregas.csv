@@ -1,0 +1,4 @@
+id_entrega,fecha,zona,tipo_pedido,clima,trafico,tiempo_entrega,retraso
+1,2025-09-01 10:00,San Salvador,Restaurante,Soleado,Bajo,25,0
+2,2025-09-02 11:00,Santa Ana,Farmacia,Lluvioso,Alto,40,5
+3,2025-09-03 12:00,La Libertad,Supermercado,Nublado,Medio,35,2
