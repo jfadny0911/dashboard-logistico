@@ -67,54 +67,27 @@ elif menu == "Ver Datos":
 
 
 # 📈 KPIs y Dashboard estilo BI
-elif menu == "KPIs":
-    st.header("📈 Indicadores Clave (KPIs)")
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT * FROM excel_data"))
-            data = [dict(row) for row in result.mappings()]
+if not df.empty:
+    st.subheader("📌 Indicadores Clave (KPIs)")
 
-        if data:
-            df = pd.DataFrame(data)
+    # Factores de ajuste
+    trafico_factor = {"🚦 Bajo": 1.0, "🚦 Medio": 1.15, "🚦 Alto": 1.3}
+    clima_factor = {"☀️ Soleado": 1.0, "🌥️ Nublado": 1.1, "🌧️ Lluvioso": 1.25}
 
-            total_registros = len(df)
+    # Tiempo ajustado
+    df["tiempo_ajustado"] = df["tiempo_entrega"] * df["trafico"].map(trafico_factor) * df["clima"].map(clima_factor)
 
-            # Tarjetas principales
-            col1, col2, col3 = st.columns(3)
-            col1.metric("📊 Total registros", total_registros)
-            if not df.select_dtypes(include="number").empty:
-                col2.metric("🔹 Promedio global", round(df.select_dtypes(include="number").mean().mean(), 2))
-                col3.metric("📈 Máximo global", round(df.select_dtypes(include="number").max().max(), 2))
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Promedio de Entrega (min)", round(df["tiempo_entrega"].mean(), 2))
+    col2.metric("Promedio Ajustado (min)", round(df["tiempo_ajustado"].mean(), 2))
+    col3.metric("Retraso Promedio (min)", round(df["retraso"].mean(), 2))
+    col4.metric("Total de Entregas", len(df))
 
-            # Gráficas de columnas numéricas
-            if not df.select_dtypes(include="number").empty:
-                st.subheader("📊 Gráficas interactivas")
-                numeric_cols = df.select_dtypes(include="number").columns
+    # KPI adicionales
+    col5, col6 = st.columns(2)
+    col5.metric("Entrega más rápida (ajustada)", round(df["tiempo_ajustado"].min(), 2))
+    col6.metric("Entrega más larga (ajustada)", round(df["tiempo_ajustado"].max(), 2))
 
-                # Gráfica de barras
-                df_sum = df[numeric_cols].sum().reset_index()
-                df_sum.columns = ["Columna", "Suma"]
-                fig_bar = px.bar(df_sum, x="Columna", y="Suma", title="Suma por columna", color="Columna")
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-                # Gráfica de líneas
-                df_avg = df[numeric_cols].mean().reset_index()
-                df_avg.columns = ["Columna", "Promedio"]
-                fig_line = px.line(df_avg, x="Columna", y="Promedio", title="Promedio por columna", markers=True)
-                st.plotly_chart(fig_line, use_container_width=True)
-
-            # Gráfica de pastel para categóricas
-            cat_cols = df.select_dtypes(include="object").columns
-            if len(cat_cols) > 0:
-                st.subheader("🥧 Distribución categórica")
-                col_select = st.selectbox("Selecciona columna categórica", cat_cols)
-                fig_pie = px.pie(df, names=col_select, title=f"Distribución de {col_select}")
-                st.plotly_chart(fig_pie, use_container_width=True)
-
-        else:
-            st.info("No hay datos para calcular KPIs.")
-    except Exception as e:
-        st.error(f"Error: {e}")
 
 
 # 🚚 Predicción de Rutas basada en ML con ajuste por clima y tráfico
