@@ -1,11 +1,10 @@
 streamlit
 pandas
-sqlalchemy
-psycopg2-binary
 plotly
 scikit-learn
+sqlalchemy
+psycopg2-binary
 openpyxl
 folium
 requests
-xlsxwriter
-st_folium
+streamlit-folium
