@@ -89,12 +89,14 @@ if menu == "Ver Datos":
             try:
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
+                    # Renombrar columnas a un formato consistente para la BD
                     df_to_load.columns = [
                         col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip()
                         for col in df_to_load.columns
                     ]
                     
                     with engine.connect() as conn:
+                        conn.execute(text("TRUNCATE TABLE entregas"))
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
                         conn.commit()
                     st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
@@ -208,7 +210,7 @@ elif menu == "Predicción de Rutas":
                 if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
                     st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
                 else:
-                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.extract(r'([\d\.\-]+)').astype(float)
+                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
                     ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
                     
                     todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
@@ -229,7 +231,6 @@ elif menu == "Predicción de Rutas":
                         trafico_options = ['Bajo', 'Medio', 'Alto']
                         selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
 
-                    # 🌟 Nuevo: botón para actualizar la predicción
                     if st.button("Actualizar y Mostrar Predicción"):
                         if origen and destino:
                             if origen != destino:
