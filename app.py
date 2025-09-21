@@ -6,7 +6,6 @@ import plotly.express as px
 import folium
 from streamlit_folium import st_folium
 import random
-import time
 from io import StringIO
 
 # ===============================
@@ -27,7 +26,7 @@ st.title("📦 Dashboard Predictivo - ChivoFast")
 # ===============================
 def read_csv_with_encoding_and_delimiter(file_path, delimiter=','):
     """Intenta leer un archivo CSV con diferentes codificaciones."""
-    encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+    encodings = ['latin1', 'utf-8', 'iso-8859-1', 'cp1252']
     for enc in encodings:
         try:
             return pd.read_csv(file_path, sep=delimiter, encoding=enc)
@@ -41,22 +40,22 @@ def read_csv_with_encoding_and_delimiter(file_path, delimiter=','):
 
 def read_uploaded_csv_with_encoding(uploaded_file):
     """Intenta leer un archivo CSV subido con diferentes codificaciones y detecta el delimitador."""
-    encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+    encodings = ['latin1', 'utf-8', 'iso-8859-1', 'cp1252']
     for enc in encodings:
         try:
-            # Primero, leer con el delimitador predeterminado de pandas (,)
             file_content = uploaded_file.getvalue().decode(enc)
-            df = pd.read_csv(StringIO(file_content))
-            return df
-        except UnicodeDecodeError:
-            continue
-        except pd.errors.ParserError:
-            # Si falla, intenta con otros delimitadores comunes
+            # Intenta detectar el delimitador automáticamente
             try:
-                df = pd.read_csv(StringIO(file_content), sep=';')
+                df = pd.read_csv(StringIO(file_content))
                 return df
             except pd.errors.ParserError:
-                continue
+                try:
+                    df = pd.read_csv(StringIO(file_content), sep=';')
+                    return df
+                except pd.errors.ParserError:
+                    continue
+        except UnicodeDecodeError:
+            continue
     st.error("❌ Error: No se pudo leer el archivo subido. Verifica la codificación y el delimitador.")
     return None
 
@@ -84,7 +83,7 @@ def create_and_load_table():
             st.warning("No se pudo cargar uno o ambos archivos locales. Abortando la carga de datos.")
             return
 
-        entregas_df.columns = [col.replace('lÃ­nea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
+        entregas_df.columns = [col.replace('lÃnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
         ubicaciones_df.columns = [col.replace(' ', '_') for col in ubicaciones_df.columns]
         
         df_unificado = pd.merge(entregas_df, ubicaciones_df, left_on='zona', right_on='departamento', how='left')
@@ -227,9 +226,17 @@ elif menu == "Predicción de Rutas":
             
             if ubicaciones_df is None:
                 st.warning("El archivo subido no pudo ser procesado. Asegúrate de que es un CSV válido.")
-            elif 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
-                st.error("❌ Error: El archivo debe contener las columnas 'ubicacion', 'latitud' y 'longitud'.")
+            # 🌟 Se modifican los nombres de las columnas para que coincidan con tu archivo
+            elif 'Ubicación' not in ubicaciones_df.columns or 'Latitud' not in ubicaciones_df.columns or 'Longitud' not in ubicaciones_df.columns:
+                st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud'.")
             else:
+                # Renombrar las columnas del archivo subido para que el resto del código funcione
+                ubicaciones_df = ubicaciones_df.rename(columns={
+                    'Ubicación': 'ubicacion',
+                    'Latitud': 'latitud',
+                    'Longitud': 'longitud'
+                })
+
                 todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
                 
                 st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
