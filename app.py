@@ -25,39 +25,19 @@ st.title("📦 Dashboard Predictivo - ChivoFast")
 # ===============================
 # 📋 Funciones para la Base de Datos y Manejo de Archivos
 # ===============================
-def read_csv_with_encoding_and_delimiter(file_path, delimiter=None):
-    """Intenta leer un archivo CSV con diferentes codificaciones y detecta el delimitador."""
-    encodings = ['latin1', 'utf-8', 'iso-8859-1', 'cp1252']
-    for enc in encodings:
-        try:
-            return pd.read_csv(file_path, sep=delimiter, encoding=enc, engine='python')
-        except UnicodeDecodeError:
-            continue
-        except FileNotFoundError:
-            st.error(f"❌ Error: Archivo no encontrado en la ruta: {file_path}")
-            return None
-        except pd.errors.ParserError:
-            continue
-    st.error("❌ Error de codificación: No se pudo leer el archivo con las codificaciones probadas.")
-    return None
-
-def read_uploaded_csv_with_encoding(uploaded_file):
-    """Intenta leer un archivo CSV subido con diferentes codificaciones y detecta el delimitador."""
+def read_uploaded_csv_with_encoding(uploaded_file, delimiter=None):
+    """
+    Intenta leer un archivo CSV subido con diferentes codificaciones y detecta el delimitador.
+    """
     encodings = ['latin1', 'utf-8', 'iso-8859-1', 'cp1252']
     for enc in encodings:
         try:
             file_content = uploaded_file.getvalue().decode(enc)
-            # Intenta detectar el delimitador automáticamente
-            try:
-                df = pd.read_csv(StringIO(file_content))
-                return df
-            except pd.errors.ParserError:
-                try:
-                    df = pd.read_csv(StringIO(file_content), sep=';')
-                    return df
-                except pd.errors.ParserError:
-                    continue
+            df = pd.read_csv(StringIO(file_content), sep=delimiter, engine='python')
+            return df
         except UnicodeDecodeError:
+            continue
+        except pd.errors.ParserError:
             continue
     st.error("❌ Error: No se pudo leer el archivo subido. Verifica la codificación y el delimitador.")
     return None
@@ -73,34 +53,6 @@ def check_table_exists():
         except Exception:
             return False
 
-def create_and_load_table_from_local():
-    """
-    Unifica los archivos CSV locales y crea la tabla 'entregas' en la base de datos.
-    """
-    st.info("Unificando y cargando datos de archivos locales...")
-    try:
-        ubicaciones_df = read_csv_with_encoding_and_delimiter('ubicaciones_el_salvador.csv', delimiter=';')
-        entregas_df = read_csv_with_encoding_and_delimiter('dataset_entregas (1).csv')
-        
-        if ubicaciones_df is None or entregas_df is None:
-            st.warning("No se pudo cargar uno o ambos archivos locales. Abortando la carga de datos.")
-            return
-
-        entregas_df.columns = [col.replace('lÃnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
-        ubicaciones_df.columns = [col.replace(' ', '_') for col in ubicaciones_df.columns]
-        
-        df_unificado = pd.merge(entregas_df, ubicaciones_df, left_on='zona', right_on='departamento', how='left')
-        
-        with engine.connect() as conn:
-            df_unificado.to_sql('entregas', conn, if_exists='replace', index=False)
-            conn.commit()
-        st.success("✅ Datos unificados y cargados correctamente en la base de datos.")
-        st.cache_data.clear()
-        st.rerun()
-    except Exception as e:
-        st.error(f"❌ Error al unificar y cargar los datos: {e}")
-
-@st.cache_data(ttl=600)
 def load_data_from_db():
     """
     Carga todos los datos de la tabla 'entregas' en un DataFrame.
@@ -130,11 +82,27 @@ menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Predicción de Rutas", "
 if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
     
-    if not check_table_exists():
-        st.warning("La tabla 'entregas' no existe en la base de datos. Puedes cargar los datos desde un archivo local.")
-        if st.button("➕ Agregar datos desde archivos locales"):
-            create_and_load_table_from_local()
-    
+    # Botón para subir y guardar la base de datos completa
+    uploaded_db_file = st.file_uploader("Sube tu base de datos de entregas (CSV)", type=["csv"], key="db_file_uploader")
+    if uploaded_db_file is not None:
+        st.warning("⚠️ Al subir un archivo, se **reemplazará** la tabla `entregas` completa en la base de datos.")
+        if st.button("➕ Guardar base de datos"):
+            try:
+                # Se lee el archivo subido para ser la nueva base de datos
+                df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
+                if df_to_load is not None:
+                    # Renombrar columnas para consistencia si es necesario
+                    df_to_load.columns = [col.replace('lÃnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in df_to_load.columns]
+                    
+                    with engine.connect() as conn:
+                        df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
+                        conn.commit()
+                    st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
+                    st.cache_data.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error al procesar el archivo: {e}")
+
     df = load_data_from_db()
 
     if not df.empty:
@@ -244,7 +212,7 @@ elif menu == "Predicción de Rutas":
                     st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
                 else:
                     # Limpiar los valores de latitud y longitud, convirtiéndolos a flotante
-                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.extract(r'([\d\.\-]+)').astype(float)
+                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
                     ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
                     
                     todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
