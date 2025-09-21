@@ -82,17 +82,18 @@ menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Predicción de Rutas", "
 if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
     
-    # Botón para subir y guardar la base de datos completa
     uploaded_db_file = st.file_uploader("Sube tu base de datos de entregas (CSV)", type=["csv"], key="db_file_uploader")
     if uploaded_db_file is not None:
         st.warning("⚠️ Al subir un archivo, se **reemplazará** la tabla `entregas` completa en la base de datos.")
         if st.button("➕ Guardar base de datos"):
             try:
-                # Se lee el archivo subido para ser la nueva base de datos
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
-                    # Renombrar columnas para consistencia si es necesario
-                    df_to_load.columns = [col.replace('lÃnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in df_to_load.columns]
+                    # Renombrar columnas a un formato consistente para la BD
+                    df_to_load.columns = [
+                        col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip()
+                        for col in df_to_load.columns
+                    ]
                     
                     with engine.connect() as conn:
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -110,7 +111,7 @@ if menu == "Ver Datos":
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Descargar datos en CSV", csv, "datos_unificados.csv", "text/csv")
     else:
-        st.info("No hay datos en la tabla. Usa el botón para cargarlos por primera vez.")
+        st.info("No hay datos en la tabla. Sube un archivo en la sección de arriba para empezar.")
 
 # --- 📈 KPIs y Dashboard estilo BI ---
 elif menu == "KPIs":
@@ -195,7 +196,7 @@ elif menu == "Predicción de Rutas":
     
     if uploaded_file is not None:
         try:
-            ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file)
+            ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file, delimiter=';')
             
             if ubicaciones_df is None:
                 st.warning("El archivo subido no pudo ser procesado. Asegúrate de que es un CSV válido.")
@@ -206,7 +207,7 @@ elif menu == "Predicción de Rutas":
                     re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n'))
                     for col in ubicaciones_df.columns
                 ]
-                
+
                 # Verificar si las columnas esperadas existen después de la normalización
                 if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
                     st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
