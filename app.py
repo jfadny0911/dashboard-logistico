@@ -185,8 +185,8 @@ elif menu == "Predicción de Rutas":
     
     if uploaded_file is not None:
         try:
-            ubicaciones_df = pd.read_csv(uploaded_file, sep=';')
-            todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
+           ubicaciones_df = pd.read_csv('ubicaciones_con_coordenadas.csv', encoding='latin1')
+          entregas_df = pd.read_csv('dataset_entregas (1).csv', encoding='latin1')
             
             st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
             
