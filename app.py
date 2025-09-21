@@ -41,10 +41,11 @@ def create_and_load_table():
     """
     st.info("Unificando y cargando datos en la base de datos...")
     try:
-        ubicaciones_df = pd.read_csv('ubicaciones_con_coordenadas.csv')
-        entregas_df = pd.read_csv('dataset_entregas (1).csv')
+        # 🐛 Solución: Se especifica la codificación 'latin1' para evitar errores
+        ubicaciones_df = pd.read_csv('ubicaciones_el_salvador.csv', sep=';', encoding='latin1')
+        entregas_df = pd.read_csv('dataset_entregas (1).csv', encoding='latin1')
         
-        entregas_df.columns = [col.replace('lÃ\xadnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
+        entregas_df.columns = [col.replace('lÃnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
         ubicaciones_df.columns = [col.replace(' ', '_') for col in ubicaciones_df.columns]
         
         df_unificado = pd.merge(entregas_df, ubicaciones_df, left_on='zona', right_on='departamento', how='left')
@@ -85,6 +86,7 @@ menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Predicción de Rutas", "
 # --- 📦 Sección para agregar y ver datos ---
 if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
+    # 🌟 Aquí está el botón que solicita. Solo se muestra si la tabla no existe.
     if not check_table_exists():
         st.warning("La tabla 'entregas' no existe en la base de datos. Haz clic en el botón para cargar los datos.")
         if st.button("➕ Agregar datos"):
@@ -178,24 +180,22 @@ elif menu == "KPIs":
 elif menu == "Predicción de Rutas":
     st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
     
-    # Opción para subir el archivo de ubicaciones
     uploaded_file = st.file_uploader("Sube el archivo de ubicaciones con coordenadas (CSV)", type=["csv"], key="ubicaciones_file_uploader")
     
     if uploaded_file is not None:
         try:
-            ubicaciones_df = pd.read_csv(uploaded_file)
+            # 🐛 Solución: Se especifica la codificación 'latin1'
+            ubicaciones_df = pd.read_csv(uploaded_file, encoding='latin1')
             todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
             
             st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
             
-            # Menús desplegables para origen y destino
             col_origen, col_destino = st.columns(2)
             with col_origen:
                 origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
             with col_destino:
                 destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
 
-            # Menús desplegables para clima y tráfico
             col_clima, col_trafico = st.columns(2)
             with col_clima:
                 clima_options = ['Soleado', 'Lluvioso', 'Nublado']
@@ -204,49 +204,47 @@ elif menu == "Predicción de Rutas":
                 trafico_options = ['Bajo', 'Medio', 'Alto']
                 selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
 
-            if origen and destino and origen != destino:
-                coordenadas = {
-                    row['ubicacion']: [row['latitud'], row['longitud']]
-                    for index, row in ubicaciones_df.iterrows()
-                }
-                
-                default_coords = [13.7, -89.2]
+            if origen and destino:
+                if origen != destino:
+                    coordenadas = {
+                        row['ubicacion']: [row['latitud'], row['longitud']]
+                        for index, row in ubicaciones_df.iterrows()
+                    }
+                    
+                    default_coords = [13.7, -89.2]
 
-                mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                
-                origen_coords = coordenadas.get(origen, default_coords)
-                destino_coords = coordenadas.get(destino, default_coords)
-                
-                folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-                folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
-                
-                # Ruta simulada
-                puntos = [
-                    origen_coords,
-                    [(origen_coords[0] + destino_coords[0])/2 + random.uniform(-0.05, 0.05), (origen_coords[1] + destino_coords[1])/2 + random.uniform(-0.05, 0.05)],
-                    destino_coords
-                ]
-                folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
-                
-                st_folium(mapa, width=700, height=500)
-                
-                # Pronóstico de tiempo de entrega
-                base_time = 30  # Tiempo base en minutos
-                if selected_trafico == 'Medio':
-                    base_time += 15
-                elif selected_trafico == 'Alto':
-                    base_time += 30
-                
-                if selected_clima == 'Lluvioso':
-                    base_time += 10
-                
-                tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-                
-                st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-                st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
-
-            else:
-                st.warning("El origen y destino no pueden ser iguales o no se ha seleccionado una ubicación.")
+                    mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
+                    
+                    origen_coords = coordenadas.get(origen, default_coords)
+                    destino_coords = coordenadas.get(destino, default_coords)
+                    
+                    folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
+                    folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+                    
+                    puntos = [
+                        origen_coords,
+                        [(origen_coords[0] + destino_coords[0])/2 + random.uniform(-0.05, 0.05), (origen_coords[1] + destino_coords[1])/2 + random.uniform(-0.05, 0.05)],
+                        destino_coords
+                    ]
+                    folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
+                    
+                    st_folium(mapa, width=700, height=500)
+                    
+                    base_time = 30
+                    if selected_trafico == 'Medio':
+                        base_time += 15
+                    elif selected_trafico == 'Alto':
+                        base_time += 30
+                    
+                    if selected_clima == 'Lluvioso':
+                        base_time += 10
+                    
+                    tiempo_estimado = random.randint(base_time - 5, base_time + 5)
+                    
+                    st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
+                    st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
+                else:
+                    st.warning("El origen y destino no pueden ser iguales.")
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo: {e}")
     else:
