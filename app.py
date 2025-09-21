@@ -6,7 +6,6 @@ import plotly.express as px
 import folium
 from streamlit_folium import st_folium
 import random
-from io import StringIO
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -22,43 +21,8 @@ st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
 st.title("📦 Dashboard Predictivo - ChivoFast")
 
 # ===============================
-# 📋 Funciones para la Base de Datos y Manejo de Archivos
+# 📋 Funciones para la Base de Datos
 # ===============================
-def read_csv_with_encoding_and_delimiter(file_path, delimiter=','):
-    """Intenta leer un archivo CSV con diferentes codificaciones."""
-    encodings = ['latin1', 'utf-8', 'iso-8859-1', 'cp1252']
-    for enc in encodings:
-        try:
-            return pd.read_csv(file_path, sep=delimiter, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-        except FileNotFoundError:
-            st.error(f"❌ Error: Archivo no encontrado en la ruta: {file_path}")
-            return None
-    st.error("❌ Error de codificación: No se pudo leer el archivo con las codificaciones probadas.")
-    return None
-
-def read_uploaded_csv_with_encoding(uploaded_file):
-    """Intenta leer un archivo CSV subido con diferentes codificaciones y detecta el delimitador."""
-    encodings = ['latin1', 'utf-8', 'iso-8859-1', 'cp1252']
-    for enc in encodings:
-        try:
-            file_content = uploaded_file.getvalue().decode(enc)
-            # Intenta detectar el delimitador automáticamente
-            try:
-                df = pd.read_csv(StringIO(file_content))
-                return df
-            except pd.errors.ParserError:
-                try:
-                    df = pd.read_csv(StringIO(file_content), sep=';')
-                    return df
-                except pd.errors.ParserError:
-                    continue
-        except UnicodeDecodeError:
-            continue
-    st.error("❌ Error: No se pudo leer el archivo subido. Verifica la codificación y el delimitador.")
-    return None
-
 def check_table_exists():
     """
     Verifica si la tabla 'entregas' existe en la base de datos.
@@ -76,17 +40,17 @@ def create_and_load_table():
     """
     st.info("Unificando y cargando datos en la base de datos...")
     try:
-        ubicaciones_df = read_csv_with_encoding_and_delimiter('ubicaciones_el_salvador.csv', delimiter=';')
-        entregas_df = read_csv_with_encoding_and_delimiter('dataset_entregas (1).csv')
+        ubicaciones_df = pd.read_csv('ubicaciones_el_salvador.csv', sep=';')
+        entregas_df = pd.read_csv('dataset_entregas (1).csv')
         
-        if ubicaciones_df is None or entregas_df is None:
-            st.warning("No se pudo cargar uno o ambos archivos locales. Abortando la carga de datos.")
-            return
-
-        entregas_df.columns = [col.replace('lÃnea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
+        entregas_df.columns = [col.replace('lÃ­nea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
         ubicaciones_df.columns = [col.replace(' ', '_') for col in ubicaciones_df.columns]
         
-        df_unificado = pd.merge(entregas_df, ubicaciones_df, left_on='zona', right_on='departamento', how='left')
+        ubicaciones_df['temp_zona'] = ubicaciones_df['departamento']
+        entregas_df['temp_zona'] = entregas_df['zona']
+        
+        df_unificado = pd.merge(entregas_df, ubicaciones_df, on='temp_zona', how='left')
+        df_unificado.drop(columns=['temp_zona'], inplace=True)
         
         with engine.connect() as conn:
             df_unificado.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -125,10 +89,9 @@ menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Predicción de Rutas", "
 if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
     if not check_table_exists():
-        st.warning("La tabla 'entregas' no existe en la base de datos. Haz clic en el botón para cargar los datos.")
-        if st.button("➕ Agregar datos"):
+        if st.button("➕ Agregar datos (15,000 registros)"):
             create_and_load_table()
-    
+            
     df = load_data_from_db()
 
     if not df.empty:
@@ -217,91 +180,61 @@ elif menu == "KPIs":
 elif menu == "Predicción de Rutas":
     st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
     
-    uploaded_file = st.file_uploader("Sube el archivo de ubicaciones con coordenadas (CSV)", type=["csv"], key="ubicaciones_file_uploader")
+    # Opción para subir el archivo de ubicaciones
+    uploaded_file = st.file_uploader("Sube el archivo de ubicaciones (CSV)", type=["csv"], key="ubicaciones_file_uploader")
     
     if uploaded_file is not None:
         try:
-            ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file)
+            ubicaciones_df = pd.read_csv(uploaded_file, sep=';')
+            todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
             
-            if ubicaciones_df is None:
-                st.warning("El archivo subido no pudo ser procesado. Asegúrate de que es un CSV válido.")
-            # Se revisan y renombran las columnas para manejar mayúsculas y tildes
-            required_cols = {'Ubicación': 'ubicacion', 'Latitud': 'latitud', 'Longitud': 'longitud', 'Municipio': 'municipio', 'Departamento': 'departamento'}
+            st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
             
-            for original, new in required_cols.items():
-                if original in ubicaciones_df.columns:
-                    ubicaciones_df = ubicaciones_df.rename(columns={original: new})
+            col_origen, col_destino = st.columns(2)
+            with col_origen:
+                origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
+            with col_destino:
+                destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
 
-            if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
-                st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud'.")
-            else:
-                # Limpiar los valores de latitud y longitud para que sean numéricos
-                ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
-                ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
-                
-                todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
-                
-                st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
-                
-                col_origen, col_destino = st.columns(2)
-                with col_origen:
-                    origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
-                with col_destino:
-                    destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
+            if origen and destino:
+                if origen != destino:
+                    coordenadas = {
+                        row['ubicacion']: [row['latitud'], row['longitud']]
+                        for index, row in ubicaciones_df.iterrows()
+                    }
+                    
+                    default_coords = [13.7, -89.2]
 
-                col_clima, col_trafico = st.columns(2)
-                with col_clima:
-                    clima_options = ['Soleado', 'Lluvioso', 'Nublado']
-                    selected_clima = st.selectbox("Selecciona el clima:", options=clima_options)
-                with col_trafico:
-                    trafico_options = ['Bajo', 'Medio', 'Alto']
-                    selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
-
-                if origen and destino:
-                    if origen != destino:
-                        coordenadas = {
-                            row['ubicacion']: [row['latitud'], row['longitud']]
-                            for index, row in ubicaciones_df.iterrows()
-                        }
-                        
-                        default_coords = [13.7, -89.2]
-
-                        mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                        
-                        origen_coords = coordenadas.get(origen, default_coords)
-                        destino_coords = coordenadas.get(destino, default_coords)
-                        
-                        folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-                        folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
-                        
-                        puntos = [
-                            origen_coords,
-                            [(origen_coords[0] + destino_coords[0])/2 + random.uniform(-0.05, 0.05), (origen_coords[1] + destino_coords[1])/2 + random.uniform(-0.05, 0.05)],
-                            destino_coords
-                        ]
-                        folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
-                        
-                        st_folium(mapa, width=700, height=500)
-                        
-                        base_time = 30
-                        if selected_trafico == 'Medio':
-                            base_time += 15
-                        elif selected_trafico == 'Alto':
-                            base_time += 30
-                        
-                        if selected_clima == 'Lluvioso':
-                            base_time += 10
-                        
-                        tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-                        
-                        st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-                        st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
-                    else:
-                        st.warning("El origen y destino no pueden ser iguales.")
+                    mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
+                    
+                    origen_coords = coordenadas.get(origen, default_coords)
+                    destino_coords = coordenadas.get(destino, default_coords)
+                    
+                    folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
+                    folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+                    
+                    # Ruta simulada
+                    puntos = [
+                        origen_coords,
+                        [(origen_coords[0] + destino_coords[0])/2 + random.uniform(-0.05, 0.05), (origen_coords[1] + destino_coords[1])/2 + random.uniform(-0.05, 0.05)],
+                        destino_coords
+                    ]
+                    folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
+                    
+                    st_folium(mapa, width=700, height=500)
+                    
+                    tiempo_estimado = random.randint(30, 120)
+                    trafico = random.choice(["🚦 Bajo", "🚦 Medio", "🚦 Alto"])
+                    clima = random.choice(["☀️ Soleado", "🌧️ Lluvioso", "🌥️ Nublado"])
+                    
+                    st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
+                    st.info(f"Condiciones: {trafico} | {clima}")
+                else:
+                    st.warning("El origen y destino no pueden ser iguales.")
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo: {e}")
     else:
-        st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
+        st.info("Por favor, sube el archivo de ubicaciones para ver las predicciones de ruta.")
 
 # --- 🗑️ Sección para borrar datos ---
 elif menu == "Borrar Datos":
