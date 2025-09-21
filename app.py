@@ -226,12 +226,7 @@ elif menu == "Predicción de Rutas":
                 destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
 
             col_clima, col_trafico = st.columns(2)
-            with col_clima:
-                clima_options = ['Soleado', 'Lluvioso', 'Nublado']
-                selected_clima = st.selectbox("Selecciona el clima:", options=clima_options)
-            with col_trafico:
-                trafico_options = ['Bajo', 'Medio', 'Alto']
-                selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
+           
 
             if origen and destino and origen != destino:
                 coordenadas = {
@@ -284,15 +279,7 @@ elif menu == "Predicción de Rutas":
                 st.markdown(f"**[Abrir en Google Maps]({google_maps_link})**", unsafe_allow_html=True)
                 st.markdown(f"**[Abrir en Waze]({waze_link})**", unsafe_allow_html=True)
                 
-                email_to_send = st.text_input("Ingresa el correo electrónico para enviar la ruta:")
-                if st.button("Enviar por correo"):
-                    if email_to_send:
-                        try:
-                            st.success(f"✅ La ruta ha sido enviada a {email_to_send}.")
-                        except Exception as e:
-                            st.error(f"❌ Error al enviar el correo: {e}")
-                    else:
-                        st.warning("Por favor, ingresa una dirección de correo válida.")
+              
             else:
                 st.warning("El origen y destino no pueden ser iguales.")
     else:
