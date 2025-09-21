@@ -7,6 +7,8 @@ import folium
 from streamlit_folium import st_folium
 import random
 from io import StringIO
+import time
+import re
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -225,80 +227,81 @@ elif menu == "Predicción de Rutas":
             
             if ubicaciones_df is None:
                 st.warning("El archivo subido no pudo ser procesado. Asegúrate de que es un CSV válido.")
-            # 🌟 Se modifican los nombres de las columnas para que coincidan con tu archivo
-            elif 'Ubicación' not in ubicaciones_df.columns or 'Latitud' not in ubicaciones_df.columns or 'Longitud' not in ubicaciones_df.columns:
-                st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud'.")
             else:
-                # Renombrar las columnas del archivo subido para que el resto del código funcione
-                ubicaciones_df = ubicaciones_df.rename(columns={
-                    'Ubicación': 'ubicacion',
-                    'Latitud': 'latitud',
-                    'Longitud': 'longitud'
-                })
-
-                # Limpiar los valores de latitud y longitud para eliminar el texto extra
-                ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
-                ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+                # 🌟 Manejar los nombres de columna y el formato de los datos del archivo subido
+                # Normalizar nombres de columnas a minúsculas y sin tildes
+                ubicaciones_df.columns = [
+                    re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n'))
+                    for col in ubicaciones_df.columns
+                ]
                 
-                todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
-                
-                st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
-                
-                col_origen, col_destino = st.columns(2)
-                with col_origen:
-                    origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
-                with col_destino:
-                    destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
+                # Verificar si las columnas esperadas existen después de la normalización
+                if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
+                    st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
+                else:
+                    # Limpiar los valores de latitud y longitud, convirtiéndolos a flotante
+                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+                    ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+                    
+                    todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
+                    
+                    st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
+                    
+                    col_origen, col_destino = st.columns(2)
+                    with col_origen:
+                        origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
+                    with col_destino:
+                        destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
 
-                col_clima, col_trafico = st.columns(2)
-                with col_clima:
-                    clima_options = ['Soleado', 'Lluvioso', 'Nublado']
-                    selected_clima = st.selectbox("Selecciona el clima:", options=clima_options)
-                with col_trafico:
-                    trafico_options = ['Bajo', 'Medio', 'Alto']
-                    selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
+                    col_clima, col_trafico = st.columns(2)
+                    with col_clima:
+                        clima_options = ['Soleado', 'Lluvioso', 'Nublado']
+                        selected_clima = st.selectbox("Selecciona el clima:", options=clima_options)
+                    with col_trafico:
+                        trafico_options = ['Bajo', 'Medio', 'Alto']
+                        selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
 
-                if origen and destino:
-                    if origen != destino:
-                        coordenadas = {
-                            row['ubicacion']: [row['latitud'], row['longitud']]
-                            for index, row in ubicaciones_df.iterrows()
-                        }
-                        
-                        default_coords = [13.7, -89.2]
+                    if origen and destino:
+                        if origen != destino:
+                            coordenadas = {
+                                row['ubicacion']: [row['latitud'], row['longitud']]
+                                for index, row in ubicaciones_df.iterrows()
+                            }
+                            
+                            default_coords = [13.7, -89.2]
 
-                        mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                        
-                        origen_coords = coordenadas.get(origen, default_coords)
-                        destino_coords = coordenadas.get(destino, default_coords)
-                        
-                        folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-                        folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
-                        
-                        puntos = [
-                            origen_coords,
-                            [(origen_coords[0] + destino_coords[0])/2 + random.uniform(-0.05, 0.05), (origen_coords[1] + destino_coords[1])/2 + random.uniform(-0.05, 0.05)],
-                            destino_coords
-                        ]
-                        folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
-                        
-                        st_folium(mapa, width=700, height=500)
-                        
-                        base_time = 30
-                        if selected_trafico == 'Medio':
-                            base_time += 15
-                        elif selected_trafico == 'Alto':
-                            base_time += 30
-                        
-                        if selected_clima == 'Lluvioso':
-                            base_time += 10
-                        
-                        tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-                        
-                        st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-                        st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
-                    else:
-                        st.warning("El origen y destino no pueden ser iguales.")
+                            mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
+                            
+                            origen_coords = coordenadas.get(origen, default_coords)
+                            destino_coords = coordenadas.get(destino, default_coords)
+                            
+                            folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
+                            folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+                            
+                            puntos = [
+                                origen_coords,
+                                [(origen_coords[0] + destino_coords[0])/2 + random.uniform(-0.05, 0.05), (origen_coords[1] + destino_coords[1])/2 + random.uniform(-0.05, 0.05)],
+                                destino_coords
+                            ]
+                            folium.PolyLine(puntos, color="blue", weight=4, opacity=0.8).add_to(mapa)
+                            
+                            st_folium(mapa, width=700, height=500)
+                            
+                            base_time = 30
+                            if selected_trafico == 'Medio':
+                                base_time += 15
+                            elif selected_trafico == 'Alto':
+                                base_time += 30
+                            
+                            if selected_clima == 'Lluvioso':
+                                base_time += 10
+                            
+                            tiempo_estimado = random.randint(base_time - 5, base_time + 5)
+                            
+                            st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
+                            st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
+                        else:
+                            st.warning("El origen y destino no pueden ser iguales.")
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo: {e}")
     else:
@@ -311,4 +314,3 @@ elif menu == "Borrar Datos":
     
     if st.button("Borrar TODO", key="delete_button"):
         clear_database()
-        
