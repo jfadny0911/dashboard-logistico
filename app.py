@@ -89,7 +89,6 @@ if menu == "Ver Datos":
             try:
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
-                    # Renombrar columnas a un formato consistente para la BD
                     df_to_load.columns = [
                         col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip()
                         for col in df_to_load.columns
@@ -201,19 +200,15 @@ elif menu == "Predicción de Rutas":
             if ubicaciones_df is None:
                 st.warning("El archivo subido no pudo ser procesado. Asegúrate de que es un CSV válido.")
             else:
-                # 🌟 Manejar los nombres de columna y el formato de los datos del archivo subido
-                # Normalizar nombres de columnas a minúsculas y sin tildes
                 ubicaciones_df.columns = [
                     re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n'))
                     for col in ubicaciones_df.columns
                 ]
-
-                # Verificar si las columnas esperadas existen después de la normalización
+                
                 if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
                     st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
                 else:
-                    # Limpiar los valores de latitud y longitud, convirtiéndolos a flotante
-                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+                    ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.extract(r'([\d\.\-]+)').astype(float)
                     ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
                     
                     todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
