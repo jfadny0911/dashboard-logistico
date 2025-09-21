@@ -225,7 +225,7 @@ elif menu == "Predicción de Rutas":
             with col_destino:
                 destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
 
-            col_clima, col_trafico = st.columns(2)
+           
            
 
             if origen and destino and origen != destino:
