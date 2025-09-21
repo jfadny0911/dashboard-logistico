@@ -89,7 +89,6 @@ if menu == "Ver Datos":
             try:
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
-                    # Renombrar columnas a un formato consistente para la BD
                     df_to_load.columns = [
                         col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip()
                         for col in df_to_load.columns
