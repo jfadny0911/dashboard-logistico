@@ -221,22 +221,24 @@ elif menu == "Predicción de Rutas":
     
     if uploaded_file is not None:
         try:
-            # Se usa una función más robusta para leer el archivo subido
             ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file)
             
             if ubicaciones_df is None:
                 st.warning("El archivo subido no pudo ser procesado. Asegúrate de que es un CSV válido.")
-            # 🌟 Se modifican los nombres de las columnas para que coincidan con tu archivo
-            elif 'Ubicación' not in ubicaciones_df.columns or 'Latitud' not in ubicaciones_df.columns or 'Longitud' not in ubicaciones_df.columns:
+            # Se revisan y renombran las columnas para manejar mayúsculas y tildes
+            required_cols = {'Ubicación': 'ubicacion', 'Latitud': 'latitud', 'Longitud': 'longitud', 'Municipio': 'municipio', 'Departamento': 'departamento'}
+            
+            for original, new in required_cols.items():
+                if original in ubicaciones_df.columns:
+                    ubicaciones_df = ubicaciones_df.rename(columns={original: new})
+
+            if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
                 st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud'.")
             else:
-                # Renombrar las columnas del archivo subido para que el resto del código funcione
-                ubicaciones_df = ubicaciones_df.rename(columns={
-                    'Ubicación': 'ubicacion',
-                    'Latitud': 'latitud',
-                    'Longitud': 'longitud'
-                })
-
+                # Limpiar los valores de latitud y longitud para que sean numéricos
+                ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+                ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+                
                 todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
                 
                 st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
