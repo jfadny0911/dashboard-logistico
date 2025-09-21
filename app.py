@@ -23,75 +23,75 @@ st.title("📦 Dashboard Predictivo - ChivoFast")
 # ===============================
 # 📋 Carga y Unificación de Datos
 # ===============================
-def check_and_create_table():
+def create_and_load_table():
     """
-    Verifica si la tabla 'entregas' existe en la BD de Render y la crea si no es así,
-    cargando los datos de los archivos CSV unificados.
+    Unifica los archivos CSV y crea la tabla 'entregas' en la base de datos de Render.
     """
+    st.info("Unificando y cargando datos en la base de datos...")
     try:
-        with engine.connect() as conn:
-            # Intenta leer una fila para verificar si la tabla existe
-            conn.execute(text("SELECT 1 FROM entregas LIMIT 1"))
-        return True
-    except Exception:
-        # Si la tabla no existe, procede a crearla
-        st.info("La tabla 'entregas' no existe en la base de datos. Unificando y cargando datos...")
-        try:
-            # Cargar datos de los archivos CSV locales
-            ubicaciones_df = pd.read_csv('ubicaciones_el_salvador.csv', sep=';')
-            entregas_df = pd.read_csv('dataset_entregas (1).csv')
-            
-            # Unificar los DataFrames
-            entregas_df.columns = [col.replace('lÃ­nea', 'linea').replace('fecha', 'hora') for col in entregas_df.columns]
-            df_unificado = pd.merge(entregas_df, ubicaciones_df, on='zona')
-            
-            # Guardar el DataFrame unificado en la base de datos de Render
-            with engine.connect() as conn:
-                df_unificado.to_sql('entregas', conn, if_exists='replace', index=False)
-                conn.commit()
-            st.success("✅ La base de datos ha sido creada y los datos se han unificado y cargado correctamente.")
-            return True
-        except Exception as e:
-            st.error(f"❌ Error al unificar y cargar los datos: {e}")
-            return False
-    return False
+        # Cargar datos de los archivos CSV locales
+        ubicaciones_df = pd.read_csv('ubicaciones_el_salvador.csv', sep=';')
+        entregas_df = pd.read_csv('dataset_entregas (1).csv')
+        
+        # Unificar los DataFrames
+        entregas_df.columns = [col.replace('lÃ­nea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
+        ubicaciones_df.columns = [col.replace(' ', '_') for col in ubicaciones_df.columns]
+        
+        # El merge original era por 'zona', pero los nuevos datos tienen 'ubicacion' en el segundo archivo.
+        # Asumiendo que 'ubicacion' del segundo archivo corresponde a 'zona' del primero.
+        # Si la columna 'ubicacion' y 'zona' son equivalentes, usamos 'ubicacion' para unirlas.
+        # También podemos crear una columna común. Aquí asumo que la columna 'ubicacion' es la que contiene los datos detallados
+        # y 'zona' es el identificador principal. Unificaré los nombres para evitar confusiones.
+        
+        ubicaciones_df.rename(columns={'ubicacion': 'zona_ubicacion'}, inplace=True)
+        # Crear una columna de unión si las zonas no coinciden directamente
+        # En este caso, el archivo 'ubicaciones' tiene 'ubicacion' y 'municipio', que no están en 'entregas_df'.
+        # El 'on=zona' del merge original no es correcto. Corregiré la lógica para usar 'departamento' y 'municipio'
+        # o 'zona' si 'zona' contiene los nombres de las ubicaciones.
+        # Revisando el archivo original, 'zona' en entregas_df es 'San Salvador', 'Santa Ana', 'San Miguel', 'La Libertad'.
+        # Y 'ubicaciones' tiene 'departamento' con esos mismos valores. Usaré 'departamento' del archivo de ubicaciones para unificar con 'zona' del archivo de entregas.
+        
+        # Simplificando la lógica de unión para evitar errores:
+        # Creamos una columna 'temp_zona' en `ubicaciones_df` para el merge
+        ubicaciones_df['temp_zona'] = ubicaciones_df['departamento']
+        entregas_df['temp_zona'] = entregas_df['zona']
 
-# Carga de datos de la base de datos en un DataFrame de Pandas
+        df_unificado = pd.merge(entregas_df, ubicaciones_df, on='temp_zona', how='left')
+        
+        # Eliminar las columnas temporales de unión y renombrar para claridad
+        df_unificado.drop(columns=['temp_zona'], inplace=True)
+        
+        with engine.connect() as conn:
+            df_unificado.to_sql('entregas', conn, if_exists='replace', index=False)
+            conn.commit()
+        st.success("✅ Datos unificados y cargados correctamente en la base de datos.")
+    except Exception as e:
+        st.error(f"❌ Error al unificar y cargar los datos: {e}")
+
+# Carga de datos desde la base de datos en un DataFrame de Pandas
+@st.cache_data(ttl=600)
 def load_data_from_db():
     """
     Carga todos los datos de la tabla 'entregas' en un DataFrame.
     """
-    if check_and_create_table():
-        try:
-            return pd.read_sql_table('entregas', engine)
-        except Exception as e:
-            st.error(f"Error al leer datos de la tabla 'entregas': {e}")
-            return pd.DataFrame()
-    return pd.DataFrame()
-
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql_table('entregas', conn)
+    except ValueError:
+        st.info("La tabla 'entregas' aún no se ha creado. Haz clic en 'Agregar Datos' para empezar.")
+        return pd.DataFrame()
 
 # ===============================
 # 📋 Menú lateral
 # ===============================
 menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Predicción de Rutas", "Borrar Datos"])
 
-# --- 🗑️ Sección para borrar datos ---
-if menu == "Borrar Datos":
-    st.header("🗑️ Eliminar registros")
-    st.warning("⚠️ Esto borrará todos los datos de la tabla `entregas` en la base de datos de Render.")
-    
-    if st.button("Borrar TODO", key="delete_button"):
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("DELETE FROM entregas"))
-                conn.commit()
-            st.success("✅ Todos los datos fueron eliminados de la base de datos.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-# --- 📋 Ver Datos ---
-elif menu == "Ver Datos":
+# --- 📤 Sección para agregar datos ---
+if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
+    if st.button("➕ Agregar Datos"):
+        create_and_load_table()
+    
     df = load_data_from_db()
     
     if not df.empty:
@@ -99,7 +99,7 @@ elif menu == "Ver Datos":
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Descargar datos en CSV", csv, "datos_unificados.csv", "text/csv")
     else:
-        st.info("No hay datos en la tabla. Sube un archivo en la opción 'Subir Excel' si quieres cargarlos.")
+        st.info("No hay datos en la tabla. Haz clic en 'Agregar Datos' para cargarlos por primera vez.")
 
 # --- 📈 KPIs y Dashboard estilo BI ---
 elif menu == "KPIs":
@@ -107,19 +107,15 @@ elif menu == "KPIs":
     df = load_data_from_db()
     
     if not df.empty:
-        df_kpi = df.rename(columns={'ubicacion': 'ubicacion', 'municipio': 'municipio', 'departamento': 'departamento',
-                                    'fecha': 'fecha', 'zona': 'zona', 'tipo_pedido': 'tipo_pedido', 'clima': 'clima',
-                                    'trafico': 'trafico', 'tiempo_entrega': 'tiempo_entrega', 'retraso': 'retraso'})
+        total_registros = len(df)
         
-        total_registros = len(df_kpi)
-
         col1, col2, col3 = st.columns(3)
         col1.metric("📊 Total registros", total_registros)
         
-        numeric_cols = df_kpi.select_dtypes(include="number").columns
+        numeric_cols = df.select_dtypes(include="number").columns
         if not numeric_cols.empty:
-            avg_global = round(df_kpi[numeric_cols].mean().mean(), 2)
-            max_global = round(df_kpi[numeric_cols].max().max(), 2)
+            avg_global = round(df[numeric_cols].mean().mean(), 2)
+            max_global = round(df[numeric_cols].max().max(), 2)
             col2.metric("🔹 Promedio global", avg_global)
             col3.metric("📈 Máximo global", max_global)
 
@@ -130,27 +126,27 @@ elif menu == "KPIs":
         with col_select_departamento:
             selected_departamento = st.selectbox(
                 'Selecciona el Departamento:',
-                options=df_kpi['departamento'].unique()
+                options=df['departamento'].unique()
             )
 
         with col_select_municipio:
-            municipios_disponibles = df_kpi[df_kpi['departamento'] == selected_departamento]['municipio'].unique()
+            municipios_disponibles = df[df['departamento'] == selected_departamento]['municipio'].unique()
             selected_municipio = st.selectbox(
                 'Selecciona el Municipio:',
                 options=municipios_disponibles
             )
 
         with col_select_tipo_pedido:
-            tipo_pedido_disponibles = df_kpi['tipo_pedido'].unique()
+            tipo_pedido_disponibles = df['tipo_pedido'].unique()
             selected_tipo_pedido = st.selectbox(
                 'Selecciona el Tipo de Pedido:',
                 options=tipo_pedido_disponibles
             )
 
-        filtered_df = df_kpi[
-            (df_kpi['departamento'] == selected_departamento) &
-            (df_kpi['municipio'] == selected_municipio) &
-            (df_kpi['tipo_pedido'] == selected_tipo_pedido)
+        filtered_df = df[
+            (df['departamento'] == selected_departamento) &
+            (df['municipio'] == selected_municipio) &
+            (df['tipo_pedido'] == selected_tipo_pedido)
         ]
 
         if not filtered_df.empty:
@@ -195,24 +191,53 @@ elif menu == "Predicción de Rutas":
             origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
         with col_destino:
             destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
+
+        # Coordenadas aproximadas para las ubicaciones
+        # Esta es una simulación. Para una aplicación real, necesitarías coordenadas geográficas reales.
+        # He creado un diccionario de coordenadas aproximadas para las ubicaciones del CSV
+        coordenadas = {
+            "Puerto de La Libertad": [13.4886, -89.3222],
+            "Playa El Tunco": [13.4886, -89.3222],
+            "Carretera al Puerto de La Libertad": [13.50, -89.32],
+            "Centro Comercial La Gran Vía": [13.6749, -89.2625],
+            "Colonia Santa Fe": [13.49, -89.31],
+            "Bulevar Monseñor Romero": [13.68, -89.26],
+            "Residencial Costa del Sol": [13.2514, -88.9408],
+            "Colonia Ciudad Pacífica": [13.4806, -88.1678],
+            "Centro Histórico": [13.482, -88.175],
+            "Metrocentro San Miguel": [13.482, -88.177],
+            "Bulevar Juan Pablo II": [13.485, -88.180],
+            "Colonia El Porvenir": [13.483, -88.185],
+            "Colonia La Presita": [13.481, -88.170],
+            "Residencial Los Olivos": [13.480, -88.165],
+            "Colonia Escalón": [13.7028, -89.2275],
+            "Colonia Miramonte": [13.71, -89.21],
+            "Colonia San Benito": [13.68, -89.24],
+            "Metrocentro San Salvador": [13.70, -89.21],
+            "Bulevar de los Héroes": [13.71, -89.20],
+            "Calle Arce": [13.70, -89.19],
+            "Residencial Altavista": [13.70, -89.15],
+            "Colonia Santa Lucía": [13.70, -89.13],
+            "Colonia La Campanera": [13.69, -89.12],
+            "Colonia Zacamil": [13.74, -89.20],
+            "Colonia San Francisco": [13.68, -89.22],
+            "Boulevard Constitución": [13.72, -89.21],
+            "Colonia Médica": [13.70, -89.20],
+            "Zona Rosa": [13.67, -89.23],
+            "Colonia San José": [13.98, -89.55],
+            "Metrocentro Santa Ana": [13.99, -89.56],
+            "Bulevar Los 44": [13.99, -89.55],
+            "Barrio El Calvario": [13.98, -89.54],
+            "Colonia El Palmar": [13.98, -89.57],
+            "Residencial Las Brisas": [13.98, -89.56]
+        }
         
         if origen and destino:
             if origen != destino:
-                # Cargar el archivo ubicaciones_el_salvador.csv para obtener las coordenadas
-                try:
-                    ubicaciones_df = pd.read_csv('ubicaciones_el_salvador.csv', sep=';')
-                    coordenadas = dict(zip(ubicaciones_df['ubicacion'], ubicaciones_df[['latitud', 'longitud']].values.tolist()))
-                except Exception as e:
-                    st.error(f"Error al cargar el archivo de ubicaciones: {e}")
-                    coordenadas = {}
-
-                # Coordenadas por defecto si la ubicación no se encuentra
-                default_coords = [13.7, -89.2]
-
                 mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
                 
-                origen_coords = coordenadas.get(origen, default_coords)
-                destino_coords = coordenadas.get(destino, default_coords)
+                origen_coords = coordenadas.get(origen, [random.uniform(13.2, 14.1), random.uniform(-89.6, -88.0)])
+                destino_coords = coordenadas.get(destino, [random.uniform(13.2, 14.1), random.uniform(-89.6, -88.0)])
                 
                 folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
                 folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
@@ -236,4 +261,18 @@ elif menu == "Predicción de Rutas":
             else:
                 st.warning("El origen y destino no pueden ser iguales.")
     else:
-        st.info("La base de datos está vacía. Por favor, carga los archivos para usar esta funcionalidad.")
+        st.info("La base de datos está vacía. Por favor, haz clic en 'Agregar Datos' para usar esta funcionalidad.")
+
+# --- 🗑️ Sección para borrar datos ---
+elif menu == "Borrar Datos":
+    st.header("🗑️ Eliminar registros")
+    st.warning("⚠️ Esto borrará todos los datos de la tabla `entregas` en la base de datos de Render.")
+    
+    if st.button("Borrar TODO", key="delete_button"):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("DELETE FROM entregas"))
+                conn.commit()
+            st.success("✅ Todos los datos fueron eliminados de la base de datos.")
+        except Exception as e:
+            st.error(f"Error: {e}")
