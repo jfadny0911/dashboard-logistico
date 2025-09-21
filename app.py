@@ -6,6 +6,7 @@ import plotly.express as px
 import folium
 from streamlit_folium import st_folium
 import random
+import time
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -40,17 +41,13 @@ def create_and_load_table():
     """
     st.info("Unificando y cargando datos en la base de datos...")
     try:
-        ubicaciones_df = pd.read_csv('ubicaciones_el_salvador.csv', sep=';')
+        ubicaciones_df = pd.read_csv('ubicaciones_con_coordenadas.csv')
         entregas_df = pd.read_csv('dataset_entregas (1).csv')
         
         entregas_df.columns = [col.replace('lÃ­nea', 'linea').replace('fecha', 'hora').replace(' ', '_') for col in entregas_df.columns]
         ubicaciones_df.columns = [col.replace(' ', '_') for col in ubicaciones_df.columns]
         
-        ubicaciones_df['temp_zona'] = ubicaciones_df['departamento']
-        entregas_df['temp_zona'] = entregas_df['zona']
-        
-        df_unificado = pd.merge(entregas_df, ubicaciones_df, on='temp_zona', how='left')
-        df_unificado.drop(columns=['temp_zona'], inplace=True)
+        df_unificado = pd.merge(entregas_df, ubicaciones_df, left_on='zona', right_on='departamento', how='left')
         
         with engine.connect() as conn:
             df_unificado.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -89,9 +86,10 @@ menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Predicción de Rutas", "
 if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
     if not check_table_exists():
-        if st.button("➕ Agregar datos (15,000 registros)"):
+        st.warning("La tabla 'entregas' no existe en la base de datos. Haz clic en el botón para cargar los datos.")
+        if st.button("➕ Agregar datos"):
             create_and_load_table()
-            
+    
     df = load_data_from_db()
 
     if not df.empty:
@@ -181,11 +179,11 @@ elif menu == "Predicción de Rutas":
     st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
     
     # Opción para subir el archivo de ubicaciones
-    uploaded_file = st.file_uploader("Sube el archivo de ubicaciones (CSV)", type=["csv"], key="ubicaciones_file_uploader")
+    uploaded_file = st.file_uploader("Sube el archivo de ubicaciones con coordenadas (CSV)", type=["csv"], key="ubicaciones_file_uploader")
     
     if uploaded_file is not None:
         try:
-            ubicaciones_df = pd.read_csv(uploaded_file, sep=';')
+            ubicaciones_df = pd.read_csv(uploaded_file)
             todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
             
             st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
