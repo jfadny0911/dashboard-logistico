@@ -197,17 +197,14 @@ elif menu == "Ingresar Pedido":
     if df.empty:
         st.warning("No hay datos en la base de datos para generar predicciones. Por favor, carga un archivo en la sección 'Ver Datos'.")
     else:
-        # Generar un nuevo número de gestión al hacer clic en el botón
-        if 'orden_gestion_nueva' not in st.session_state:
-            st.session_state['orden_gestion_nueva'] = ""
-
+        # Generar un nuevo número de gestión
         if st.button("Generar Gestión"):
             ultima_gestion = df['orden_gestion'].max() if 'orden_gestion' in df.columns and not df.empty else 0
             nueva_gestion = ultima_gestion + 1
             st.session_state['orden_gestion_nueva'] = f"{nueva_gestion:04d}"
         
-        orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state['orden_gestion_nueva'], disabled=True)
-        
+        orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state.get('orden_gestion_nueva', ''), disabled=True)
+
         col1, col2 = st.columns(2)
         with col1:
             departamentos = sorted(df['departamento'].unique())
@@ -299,6 +296,7 @@ elif menu == "Predicción de Rutas":
             
             df_entregas = load_data_from_db()
 
+            # --- 🌟 Opción de Predicción para órdenes pendientes ---
             if not df_entregas.empty:
                 ordenes_pendientes = df_entregas[df_entregas['tiempo_entrega'].isnull()]['orden_gestion'].unique()
                 selected_orden = st.selectbox("Selecciona una orden de gestión pendiente:", [''] + sorted(ordenes_pendientes))
