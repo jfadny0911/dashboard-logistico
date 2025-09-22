@@ -8,7 +8,6 @@ from streamlit_folium import st_folium
 import random
 from io import StringIO
 import re
-from datetime import datetime
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -54,7 +53,6 @@ def check_table_exists():
         except Exception:
             return False
 
-@st.cache_data(ttl=600)
 def load_data_from_db():
     """
     Carga todos los datos de la tabla 'entregas' en un DataFrame.
@@ -197,7 +195,6 @@ elif menu == "Ingresar Pedido":
     if df.empty:
         st.warning("No hay datos en la base de datos para generar predicciones. Por favor, carga un archivo en la sección 'Ver Datos'.")
     else:
-        # Menús para ingresar datos del pedido
         col1, col2 = st.columns(2)
         with col1:
             orden_gestion = st.text_input("Número de Gestión")
@@ -220,18 +217,11 @@ elif menu == "Ingresar Pedido":
         
         if st.button("Calcular Predicción"):
             base_time = 30
-            if selected_trafico == 'Medio':
-                base_time += 15
-            elif selected_trafico == 'Alto':
-                base_time += 30
-            
-            if selected_clima == 'Lluvioso':
-                base_time += 10
-            
+            if selected_trafico == 'Medio': base_time += 15
+            elif selected_trafico == 'Alto': base_time += 30
+            if selected_clima == 'Lluvioso': base_time += 10
             tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-            
             st.session_state['prediccion'] = tiempo_estimado
-            
             st.success(f"⏱️ Tiempo estimado de entrega: {tiempo_estimado} minutos")
             
         st.subheader("Datos de entrega real")
@@ -276,23 +266,23 @@ elif menu == "Predicción de Rutas":
         try:
             ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file, delimiter=';')
             st.session_state['ubicaciones_df'] = ubicaciones_df
-            if st.session_state['ubicaciones_df'] is not None:
-                st.session_state['ubicaciones_df'].columns = [
-                    re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n'))
-                    for col in st.session_state['ubicaciones_df'].columns
-                ]
-                st.session_state['ubicaciones_df']['latitud'] = st.session_state['ubicaciones_df']['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
-                st.session_state['ubicaciones_df']['longitud'] = st.session_state['ubicaciones_df']['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
-                st.success("✅ Archivo de ubicaciones cargado con éxito. Ahora puedes seleccionar los puntos de la ruta.")
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo: {e}")
 
     if 'ubicaciones_df' in st.session_state and st.session_state['ubicaciones_df'] is not None:
         ubicaciones_df = st.session_state['ubicaciones_df']
         
+        ubicaciones_df.columns = [
+            re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n'))
+            for col in ubicaciones_df.columns
+        ]
+        
         if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
+            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+            
             todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
             
             df_entregas = load_data_from_db()
@@ -319,6 +309,7 @@ elif menu == "Predicción de Rutas":
                         }
                         
                         default_coords = [13.7, -89.2]
+                        
                         origen_coords = coordenadas.get(origen_prediccion, default_coords)
                         destino_coords = coordenadas.get(destino_prediccion, default_coords)
                         
@@ -327,10 +318,10 @@ elif menu == "Predicción de Rutas":
                         folium.Marker(destino_coords, popup=f"Destino: {destino_prediccion}", icon=folium.Icon(color="red")).add_to(mapa)
                         folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
                         st_folium(mapa, width=700, height=500)
+                        
                         st.success(f"⏱️ Predicción generada para la ruta: {origen_prediccion} -> {destino_prediccion}")
                     
             st.markdown("---")
-            # --- 🌟 Opción de Predicción manual ---
             st.subheader("O también, ingresa manualmente una nueva ruta:")
             
             col_origen, col_destino = st.columns(2)
@@ -347,48 +338,51 @@ elif menu == "Predicción de Rutas":
                 trafico_options = ['Bajo', 'Medio', 'Alto']
                 selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
 
-            if origen and destino and origen != destino:
-                coordenadas = {
-                    row['ubicacion']: [row['latitud'], row['longitud']]
-                    for index, row in ubicaciones_df.iterrows()
-                }
-                
-                default_coords = [13.7, -89.2]
-                origen_coords = coordenadas.get(origen, default_coords)
-                destino_coords = coordenadas.get(destino, default_coords)
-                
-                mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-                folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
-                folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
-                st_folium(mapa, width=700, height=500)
-                
-                base_time = 30
-                if selected_trafico == 'Medio': base_time += 15
-                elif selected_trafico == 'Alto': base_time += 30
-                if selected_clima == 'Lluvioso': base_time += 10
-                tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-                
-                st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-                st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
+            if st.button("Actualizar y Mostrar Predicción"):
+                if origen and destino and origen != destino:
+                    coordenadas = {
+                        row['ubicacion']: [row['latitud'], row['longitud']]
+                        for index, row in ubicaciones_df.iterrows()
+                    }
+                    
+                    default_coords = [13.7, -89.2]
+                    origen_coords = coordenadas.get(origen, default_coords)
+                    destino_coords = coordenadas.get(destino, default_coords)
+                    
+                    mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
+                    folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
+                    folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
+                    folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
+                    st_folium(mapa, width=700, height=500)
+                    
+                    base_time = 30
+                    if selected_trafico == 'Medio': base_time += 15
+                    elif selected_trafico == 'Alto': base_time += 30
+                    if selected_clima == 'Lluvioso': base_time += 10
+                    tiempo_estimado = random.randint(base_time - 5, base_time + 5)
+                    
+                    st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
+                    st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
 
-                st.subheader("Opciones de exportación de la ruta")
-                route_details = f"Ruta: {origen} -> {destino}\nOrigen Coordenadas: {origen_coords}\nDestino Coordenadas: {destino_coords}\nTiempo estimado: {tiempo_estimado} minutos\nCondiciones: Tráfico {selected_trafico} | Clima {selected_clima}"
-                
-                st.code(route_details, language="text")
-                st.markdown(f"**Enlaces rápidos:**")
-                st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})")
-                st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={destino})")
-                
-                email_to_send = st.text_input("Ingresa el correo electrónico para enviar la ruta:")
-                if st.button("Enviar por correo"):
-                    if email_to_send:
-                        try:
-                            st.success(f"✅ La ruta ha sido enviada a {email_to_send}.")
-                        except Exception as e:
-                            st.error(f"❌ Error al enviar el correo: {e}")
-                    else:
-                        st.warning("Por favor, ingresa una dirección de correo válida.")
+                    st.subheader("Opciones de exportación de la ruta")
+                    route_details = f"Ruta: {origen} -> {destino}\nOrigen Coordenadas: {origen_coords}\nDestino Coordenadas: {destino_coords}\nTiempo estimado: {tiempo_estimado} minutos\nCondiciones: Tráfico {selected_trafico} | Clima {selected_clima}"
+                    
+                    st.code(route_details, language="text")
+                    st.markdown(f"**Enlaces rápidos:**")
+                    st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})")
+                    st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={destino})")
+                    
+                    email_to_send = st.text_input("Ingresa el correo electrónico para enviar la ruta:")
+                    if st.button("Enviar por correo"):
+                        if email_to_send:
+                            try:
+                                st.success(f"✅ La ruta ha sido enviada a {email_to_send}.")
+                            except Exception as e:
+                                st.error(f"❌ Error al enviar el correo: {e}")
+                        else:
+                            st.warning("Por favor, ingresa una dirección de correo válida.")
+            else:
+                st.warning("El origen y destino no pueden ser iguales.")
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
