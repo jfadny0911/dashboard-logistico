@@ -104,7 +104,7 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
-                    # 🌟 Verificar y agregar columnas si no existen
+                    # Verificar y agregar columnas si no existen
                     if 'orden_gestion' not in df_to_load.columns:
                         df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
                         st.info("Columna 'orden_gestion' agregada automáticamente.")
