@@ -8,7 +8,8 @@ from streamlit_folium import st_folium
 import random
 from io import StringIO
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -75,6 +76,13 @@ def clear_database():
     st.cache_data.clear()
     st.rerun()
 
+def get_next_gestion_number(df):
+    """Obtiene el siguiente número de gestión secuencial."""
+    if 'orden_gestion' in df.columns and not df.empty:
+        max_gestion = df['orden_gestion'].astype(int).max()
+        return max_gestion + 1
+    return 1
+
 # ===============================
 # 📋 Menú lateral
 # ===============================
@@ -91,22 +99,11 @@ if menu == "Ver Datos":
             try:
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
-                    # Normalizar nombres de columnas
                     df_to_load.columns = [
                         re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
                         for col in df_to_load.columns
                     ]
                     
-                    # 🌟 Verificar y agregar columna 'orden_gestion' si no existe
-                    if 'orden_gestion' not in df_to_load.columns:
-                        df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
-                        st.info("Columna 'orden_gestion' agregada automáticamente.")
-                    
-                    # 🌟 Verificar y agregar columna 'estado' si no existe
-                    if 'estado' not in df_to_load.columns:
-                        df_to_load['estado'] = 'Pendiente'
-                        st.info("Columna 'estado' agregada automáticamente.")
-
                     with engine.connect() as conn:
                         conn.execute(text("TRUNCATE TABLE entregas"))
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -212,8 +209,7 @@ elif menu == "Ingresar Pedido":
             st.session_state['orden_gestion_nueva'] = ""
 
         if st.button("Generar Gestión"):
-            ultima_gestion = df['orden_gestion'].max() if 'orden_gestion' in df.columns and not df.empty else 0
-            nueva_gestion = ultima_gestion + 1
+            nueva_gestion = get_next_gestion_number(df)
             st.session_state['orden_gestion_nueva'] = f"{nueva_gestion:04d}"
         
         orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state.get('orden_gestion_nueva', ''), disabled=True)
