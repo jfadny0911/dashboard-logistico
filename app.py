@@ -197,9 +197,19 @@ elif menu == "Ingresar Pedido":
     if df.empty:
         st.warning("No hay datos en la base de datos para generar predicciones. Por favor, carga un archivo en la sección 'Ver Datos'.")
     else:
+        # Generar un nuevo número de gestión al hacer clic en el botón
+        if 'orden_gestion_nueva' not in st.session_state:
+            st.session_state['orden_gestion_nueva'] = ""
+
+        if st.button("Generar Gestión"):
+            ultima_gestion = df['orden_gestion'].max() if 'orden_gestion' in df.columns and not df.empty else 0
+            nueva_gestion = ultima_gestion + 1
+            st.session_state['orden_gestion_nueva'] = f"{nueva_gestion:04d}"
+        
+        orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state['orden_gestion_nueva'], disabled=True)
+        
         col1, col2 = st.columns(2)
         with col1:
-            orden_gestion = st.text_input("Número de Gestión")
             departamentos = sorted(df['departamento'].unique())
             selected_departamento = st.selectbox("Departamento", departamentos)
             municipios = sorted(df[df['departamento'] == selected_departamento]['municipio'].unique())
@@ -231,12 +241,12 @@ elif menu == "Ingresar Pedido":
         retraso_real = st.text_input("Retraso real (minutos)")
 
         if st.button("➕ Guardar Pedido"):
-            if not orden_gestion or not selected_ubicacion:
+            if not orden_gestion_display or not selected_ubicacion:
                 st.error("Por favor, completa los campos de Número de Gestión y Ubicación.")
             else:
                 try:
                     nueva_fila = pd.DataFrame([{
-                        'orden_gestion': orden_gestion,
+                        'orden_gestion': orden_gestion_display,
                         'fecha': datetime.now(),
                         'zona': selected_departamento,
                         'tipo_pedido': selected_tipo_pedido,
@@ -381,8 +391,8 @@ elif menu == "Predicción de Rutas":
                                 st.error(f"❌ Error al enviar el correo: {e}")
                         else:
                             st.warning("Por favor, ingresa una dirección de correo válida.")
-            else:
-                st.warning("El origen y destino no pueden ser iguales.")
+                else:
+                    st.warning("El origen y destino no pueden ser iguales.")
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
