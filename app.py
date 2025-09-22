@@ -197,7 +197,6 @@ elif menu == "Ingresar Pedido":
     if df.empty:
         st.warning("No hay datos en la base de datos para generar predicciones. Por favor, carga un archivo en la sección 'Ver Datos'.")
     else:
-        # Generar un nuevo número de gestión al hacer clic en el botón
         if 'orden_gestion_nueva' not in st.session_state:
             st.session_state['orden_gestion_nueva'] = ""
 
@@ -207,7 +206,7 @@ elif menu == "Ingresar Pedido":
             st.session_state['orden_gestion_nueva'] = f"{nueva_gestion:04d}"
         
         orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state.get('orden_gestion_nueva', ''), disabled=True)
-        
+
         col1, col2 = st.columns(2)
         with col1:
             departamentos = sorted(df['departamento'].unique())
@@ -329,7 +328,14 @@ elif menu == "Predicción de Rutas":
                         folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
                         st_folium(mapa, width=700, height=500)
                         
-                        st.success(f"⏱️ Predicción generada para la ruta: {origen_prediccion} -> {destino_prediccion}")
+                        base_time = 30
+                        if orden_data['trafico'] == 'Medio': base_time += 15
+                        elif orden_data['trafico'] == 'Alto': base_time += 30
+                        if orden_data['clima'] == 'Lluvioso': base_time += 10
+                        tiempo_estimado = random.randint(base_time - 5, base_time + 5)
+                        
+                        st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
+                        st.info(f"Condiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}")
                     
             st.markdown("---")
             st.subheader("O también, ingresa manualmente una nueva ruta:")
