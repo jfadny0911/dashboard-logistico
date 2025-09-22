@@ -337,68 +337,10 @@ elif menu == "Predicción de Rutas":
                         st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
                         st.info(f"Condiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}")
                     
-            st.markdown("---")
-            st.subheader("O también, ingresa manualmente una nueva ruta:")
-            
-            col_origen, col_destino = st.columns(2)
-            with col_origen:
-                origen = st.selectbox("Selecciona zona de origen", todas_ubicaciones, key="origen_select")
-            with col_destino:
-                destino = st.selectbox("Selecciona zona de destino", todas_ubicaciones, key="destino_select")
+            # 
+            # --- Se eliminó la sección de ingreso manual ---
+            # 
 
-            col_clima, col_trafico = st.columns(2)
-            with col_clima:
-                clima_options = ['Soleado', 'Lluvioso', 'Nublado']
-                selected_clima = st.selectbox("Selecciona el clima:", options=clima_options)
-            with col_trafico:
-                trafico_options = ['Bajo', 'Medio', 'Alto']
-                selected_trafico = st.selectbox("Selecciona el tráfico:", options=trafico_options)
-
-            if st.button("Actualizar y Mostrar Predicción"):
-                if origen and destino and origen != destino:
-                    coordenadas = {
-                        row['ubicacion']: [row['latitud'], row['longitud']]
-                        for index, row in ubicaciones_df.iterrows()
-                    }
-                    
-                    default_coords = [13.7, -89.2]
-                    origen_coords = coordenadas.get(origen, default_coords)
-                    destino_coords = coordenadas.get(destino, default_coords)
-                    
-                    mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                    folium.Marker(origen_coords, popup=f"Origen: {origen}", icon=folium.Icon(color="green")).add_to(mapa)
-                    folium.Marker(destino_coords, popup=f"Destino: {destino}", icon=folium.Icon(color="red")).add_to(mapa)
-                    folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
-                    st_folium(mapa, width=700, height=500)
-                    
-                    base_time = 30
-                    if selected_trafico == 'Medio': base_time += 15
-                    elif selected_trafico == 'Alto': base_time += 30
-                    if selected_clima == 'Lluvioso': base_time += 10
-                    tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-                    
-                    st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-                    st.info(f"Condiciones: Tráfico {selected_trafico} | Clima {selected_clima}")
-
-                    st.subheader("Opciones de exportación de la ruta")
-                    route_details = f"Ruta: {origen} -> {destino}\nOrigen Coordenadas: {origen_coords}\nDestino Coordenadas: {destino_coords}\nTiempo estimado: {tiempo_estimado} minutos\nCondiciones: Tráfico {selected_trafico} | Clima {selected_clima}"
-                    
-                    st.code(route_details, language="text")
-                    st.markdown(f"**Enlaces rápidos:**")
-                    st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})")
-                    st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={destino})")
-                    
-                    email_to_send = st.text_input("Ingresa el correo electrónico para enviar la ruta:")
-                    if st.button("Enviar por correo"):
-                        if email_to_send:
-                            try:
-                                st.success(f"✅ La ruta ha sido enviada a {email_to_send}.")
-                            except Exception as e:
-                                st.error(f"❌ Error al enviar el correo: {e}")
-                        else:
-                            st.warning("Por favor, ingresa una dirección de correo válida.")
-                else:
-                    st.warning("El origen y destino no pueden ser iguales.")
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
