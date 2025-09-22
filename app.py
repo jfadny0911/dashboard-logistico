@@ -104,6 +104,19 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
+                    # 🌟 Verificar y agregar columnas si no existen
+                    if 'orden_gestion' not in df_to_load.columns:
+                        df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
+                        st.info("Columna 'orden_gestion' agregada automáticamente.")
+                    
+                    if 'estado' not in df_to_load.columns:
+                        df_to_load['estado'] = 'Pendiente'
+                        st.info("Columna 'estado' agregada automáticamente.")
+
+                    if 'inicio_ruta' not in df_to_load.columns:
+                        df_to_load['inicio_ruta'] = None
+                        st.info("Columna 'inicio_ruta' agregada automáticamente.")
+                    
                     with engine.connect() as conn:
                         conn.execute(text("TRUNCATE TABLE entregas"))
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -348,15 +361,14 @@ elif menu == "Predicción de Rutas":
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
-                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', tiempo_predicho = {tiempo_estimado}, inicio_ruta = '{datetime.now()}' WHERE orden_gestion = '{selected_orden}'"))
+                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', inicio_ruta = '{datetime.now()}' WHERE orden_gestion = '{selected_orden}'"))
                                     conn.commit()
                                 st.success(f"✅ Gestión '{selected_orden}' iniciada y marcada como Activa.")
                                 st.cache_data.clear()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Error al iniciar la ruta: {e}")
-                else:
-                    st.warning("El origen y destino no pueden ser iguales.")
+
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
@@ -373,7 +385,6 @@ elif menu == "Seguimiento de Rutas":
                 tiempo_transcurrido = datetime.now() - datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
                 tiempo_restante = timedelta(minutes=row['tiempo_predicho']) - tiempo_transcurrido
                 
-                # Para evitar valores negativos al cronometro
                 if tiempo_restante.total_seconds() < 0:
                     tiempo_restante_str = "00:00:00"
                     progreso = 1.0
@@ -385,7 +396,6 @@ elif menu == "Seguimiento de Rutas":
                     tiempo_restante_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
                     progreso = 1 - (tiempo_restante.total_seconds() / timedelta(minutes=row['tiempo_predicho']).total_seconds())
                 
-                # Asumiendo que las ubicaciones están en ubicaciones_df
                 ubicaciones_df = st.session_state.get('ubicaciones_df')
                 if ubicaciones_df is not None and not ubicaciones_df.empty:
                     coordenadas = {
