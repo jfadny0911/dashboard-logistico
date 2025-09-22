@@ -9,8 +9,6 @@ import random
 from io import StringIO
 import re
 from datetime import datetime
-import smtplib
-from email.message import EmailMessage
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
