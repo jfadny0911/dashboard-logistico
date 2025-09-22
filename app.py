@@ -91,11 +91,22 @@ if menu == "Ver Datos":
             try:
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
+                    # Normalizar nombres de columnas
                     df_to_load.columns = [
                         re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
                         for col in df_to_load.columns
                     ]
                     
+                    # 🌟 Verificar y agregar columna 'orden_gestion' si no existe
+                    if 'orden_gestion' not in df_to_load.columns:
+                        df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
+                        st.info("Columna 'orden_gestion' agregada automáticamente.")
+                    
+                    # 🌟 Verificar y agregar columna 'estado' si no existe
+                    if 'estado' not in df_to_load.columns:
+                        df_to_load['estado'] = 'Pendiente'
+                        st.info("Columna 'estado' agregada automáticamente.")
+
                     with engine.connect() as conn:
                         conn.execute(text("TRUNCATE TABLE entregas"))
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -255,7 +266,8 @@ elif menu == "Ingresar Pedido":
                         'retraso': int(retraso_real) if retraso_real else None,
                         'ubicacion': selected_ubicacion,
                         'municipio': selected_municipio,
-                        'departamento': selected_departamento
+                        'departamento': selected_departamento,
+                        'estado': 'Pendiente'
                     }])
                     
                     with engine.connect() as conn:
@@ -299,7 +311,7 @@ elif menu == "Predicción de Rutas":
             df_entregas = load_data_from_db()
 
             if not df_entregas.empty:
-                ordenes_pendientes = df_entregas[df_entregas['tiempo_entrega'].isnull()]['orden_gestion'].unique()
+                ordenes_pendientes = df_entregas[df_entregas['estado'] == 'Pendiente']['orden_gestion'].unique()
                 selected_orden = st.selectbox("Selecciona una orden de gestión pendiente:", [''] + sorted(ordenes_pendientes))
 
                 if selected_orden:
@@ -336,17 +348,7 @@ elif menu == "Predicción de Rutas":
                         
                         st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
                         st.info(f"Condiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}")
-
-                        # Opciones de exportación de la ruta
-                        st.subheader("Opciones de exportación de la ruta")
-                        route_details = f"Ruta: {origen_prediccion} -> {destino_prediccion}\nOrigen Coordenadas: {origen_coords}\nDestino Coordenadas: {destino_coords}\nTiempo estimado: {tiempo_estimado} minutos\nCondiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}"
                         
-                        st.code(route_details, language="text")
-                        st.markdown(f"**Enlaces rápidos:**")
-                        st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})")
-                        st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={destino_prediccion})")
-                        
-                        st.markdown("---")
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
@@ -361,6 +363,24 @@ elif menu == "Predicción de Rutas":
                     st.warning("El origen y destino no pueden ser iguales.")
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
+
+# --- Sección para seguimiento de rutas ---
+elif menu == "Seguimiento de Rutas":
+    st.header("🚚 Seguimiento de Rutas")
+    
+    df_entregas = load_data_from_db()
+    if not df_entregas.empty:
+        ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
+        
+        if not ordenes_activas.empty:
+            st.subheader("Gestiones Activas:")
+            for index, row in ordenes_activas.iterrows():
+                st.markdown(f"**Gestión {row['orden_gestion']}**")
+                st.info(f"En ruta desde {row['ubicacion']} | Destino: Pendiente de seleccionar")
+                st.progress(random.uniform(0.1, 0.9), text="Progreso simulado...")
+                st.markdown("---")
+        else:
+            st.info("No hay gestiones activas en este momento.")
 
 # --- 🗑️ Sección para borrar datos ---
 elif menu == "Borrar Datos":
