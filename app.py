@@ -8,7 +8,8 @@ from streamlit_folium import st_folium
 import random
 from io import StringIO
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -74,6 +75,13 @@ def clear_database():
     st.success("🗑️ Todos los datos de la tabla `entregas` han sido eliminados.")
     st.cache_data.clear()
     st.rerun()
+
+def get_next_gestion_number(df):
+    """Obtiene el siguiente número de gestión secuencial."""
+    if 'orden_gestion' in df.columns and not df.empty:
+        max_gestion = df['orden_gestion'].astype(int).max()
+        return max_gestion + 1
+    return 1
 
 # ===============================
 # 📋 Menú lateral
@@ -201,8 +209,7 @@ elif menu == "Ingresar Pedido":
             st.session_state['orden_gestion_nueva'] = ""
 
         if st.button("Generar Gestión"):
-            ultima_gestion = df['orden_gestion'].max() if 'orden_gestion' in df.columns and not df.empty else 0
-            nueva_gestion = ultima_gestion + 1
+            nueva_gestion = get_next_gestion_number(df)
             st.session_state['orden_gestion_nueva'] = f"{nueva_gestion:04d}"
         
         orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state.get('orden_gestion_nueva', ''), disabled=True)
@@ -337,21 +344,11 @@ elif menu == "Predicción de Rutas":
                         
                         st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
                         st.info(f"Condiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}")
-
-                        # Opciones de exportación de la ruta
-                        st.subheader("Opciones de exportación de la ruta")
-                        route_details = f"Ruta: {origen_prediccion} -> {destino_prediccion}\nOrigen Coordenadas: {origen_coords}\nDestino Coordenadas: {destino_coords}\nTiempo estimado: {tiempo_estimado} minutos\nCondiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}"
                         
-                        st.code(route_details, language="text")
-                        st.markdown(f"**Enlaces rápidos:**")
-                        st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})")
-                        st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={destino_prediccion})")
-                        
-                        st.markdown("---")
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
-                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa' WHERE orden_gestion = '{selected_orden}'"))
+                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', tiempo_predicho = {tiempo_estimado}, inicio_ruta = '{datetime.now()}' WHERE orden_gestion = '{selected_orden}'"))
                                     conn.commit()
                                 st.success(f"✅ Gestión '{selected_orden}' iniciada y marcada como Activa.")
                                 st.cache_data.clear()
@@ -372,11 +369,63 @@ elif menu == "Seguimiento de Rutas":
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
         if not ordenes_activas.empty:
-            st.subheader("Gestiones Activas:")
             for index, row in ordenes_activas.iterrows():
-                st.markdown(f"**Gestión {row['orden_gestion']}**")
-                st.info(f"En ruta desde {row['ubicacion']} | Destino: Pendiente de seleccionar")
-                st.progress(random.uniform(0.1, 0.9), text="Progreso simulado...")
+                tiempo_transcurrido = datetime.now() - datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
+                tiempo_restante = timedelta(minutes=row['tiempo_predicho']) - tiempo_transcurrido
+                
+                # Para evitar valores negativos al cronometro
+                if tiempo_restante.total_seconds() < 0:
+                    tiempo_restante_str = "00:00:00"
+                    progreso = 1.0
+                else:
+                    total_segundos = int(tiempo_restante.total_seconds())
+                    horas = total_segundos // 3600
+                    minutos = (total_segundos % 3600) // 60
+                    segundos = total_segundos % 60
+                    tiempo_restante_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+                    progreso = 1 - (tiempo_restante.total_seconds() / timedelta(minutes=row['tiempo_predicho']).total_seconds())
+                
+                # Asumiendo que las ubicaciones están en ubicaciones_df
+                ubicaciones_df = st.session_state.get('ubicaciones_df')
+                if ubicaciones_df is not None and not ubicaciones_df.empty:
+                    coordenadas = {
+                        loc['ubicacion']: [loc['latitud'], loc['longitud']]
+                        for index, loc in ubicaciones_df.iterrows()
+                    }
+                    origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
+                    destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
+                    google_maps_link = f"https://www.google.com/maps/dir/?api=1&origin={origen_coords[0]},{origen_coords[1]}&destination={destino_coords[0]},{destino_coords[1]}"
+                    waze_link = f"https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes"
+                else:
+                    google_maps_link = "#"
+                    waze_link = "#"
+                    origen_coords = [13.7, -89.2]
+                    destino_coords = [13.7, -89.2]
+
+                st.markdown(f"**Gestión {row['orden_gestion']} - Estado: Activa**")
+                st.info(f"Ruta: **{row['ubicacion']}** -> **{row['destino']}**")
+                st.markdown(f"**Tipo de Pedido:** {row['tipo_pedido']} | **Clima:** {row['clima']} | **Tráfico:** {row['trafico']}")
+                
+                col_progreso, col_tiempo = st.columns([3, 1])
+                with col_progreso:
+                    st.progress(progreso, text="Progreso de la ruta")
+                with col_tiempo:
+                    st.metric("Tiempo Restante", tiempo_restante_str)
+
+                col_mapas, col_acciones = st.columns([2, 1])
+                with col_mapas:
+                    st.markdown(f"**Enlaces rápidos:**")
+                    st.markdown(f"[Abrir en Google Maps]({google_maps_link})", unsafe_allow_html=True)
+                    st.markdown(f"[Abrir en Waze]({waze_link})", unsafe_allow_html=True)
+                with col_acciones:
+                    if st.button("Marcar como Entregado", key=f"entregar_{row['orden_gestion']}"):
+                        with engine.connect() as conn:
+                            conn.execute(text(f"UPDATE entregas SET estado = 'Entregado' WHERE orden_gestion = '{row['orden_gestion']}'"))
+                            conn.commit()
+                        st.success(f"✅ Gestión '{row['orden_gestion']}' marcada como Entregada.")
+                        st.cache_data.clear()
+                        st.rerun()
+
                 st.markdown("---")
         else:
             st.info("No hay gestiones activas en este momento.")
