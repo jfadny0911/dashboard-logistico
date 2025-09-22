@@ -104,6 +104,26 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
+                    # 🌟 Asegurar que las columnas clave existen y tienen el tipo correcto
+                    if 'orden_gestion' not in df_to_load.columns:
+                        df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
+                        st.info("Columna 'orden_gestion' agregada automáticamente.")
+                    
+                    if 'estado' not in df_to_load.columns:
+                        df_to_load['estado'] = 'Pendiente'
+                        st.info("Columna 'estado' agregada automáticamente.")
+                        
+                    if 'inicio_ruta' not in df_to_load.columns:
+                        df_to_load['inicio_ruta'] = None
+                    df_to_load['inicio_ruta'] = df_to_load['inicio_ruta'].astype(str)
+                    
+                    if 'destino' not in df_to_load.columns:
+                        df_to_load['destino'] = None
+                    df_to_load['destino'] = df_to_load['destino'].astype(str)
+                    
+                    if 'tiempo_predicho' not in df_to_load.columns:
+                        df_to_load['tiempo_predicho'] = None
+                    
                     with engine.connect() as conn:
                         conn.execute(text("TRUNCATE TABLE entregas"))
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -263,7 +283,10 @@ elif menu == "Ingresar Pedido":
                         'ubicacion': selected_ubicacion,
                         'municipio': selected_municipio,
                         'departamento': selected_departamento,
-                        'estado': 'Pendiente'
+                        'estado': 'Pendiente',
+                        'inicio_ruta': None,
+                        'destino': None,
+                        'tiempo_predicho': None
                     }])
                     
                     with engine.connect() as conn:
@@ -348,7 +371,7 @@ elif menu == "Predicción de Rutas":
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
-                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', inicio_ruta = '{datetime.now()}', tiempo_predicho = {tiempo_estimado} WHERE orden_gestion = '{selected_orden}'"))
+                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', inicio_ruta = '{datetime.now()}', destino = '{destino_prediccion}', tiempo_predicho = {tiempo_estimado} WHERE orden_gestion = '{selected_orden}'"))
                                     conn.commit()
                                 st.success(f"✅ Gestión '{selected_orden}' iniciada y marcada como Activa.")
                                 st.cache_data.clear()
