@@ -104,19 +104,6 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
-                    # 🌟 Verificar y agregar columnas si no existen
-                    if 'orden_gestion' not in df_to_load.columns:
-                        df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
-                        st.info("Columna 'orden_gestion' agregada automáticamente.")
-                    
-                    if 'estado' not in df_to_load.columns:
-                        df_to_load['estado'] = 'Pendiente'
-                        st.info("Columna 'estado' agregada automáticamente.")
-
-                    if 'inicio_ruta' not in df_to_load.columns:
-                        df_to_load['inicio_ruta'] = None
-                        st.info("Columna 'inicio_ruta' agregada automáticamente.")
-                    
                     with engine.connect() as conn:
                         conn.execute(text("TRUNCATE TABLE entregas"))
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
@@ -361,14 +348,15 @@ elif menu == "Predicción de Rutas":
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
-                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', inicio_ruta = '{datetime.now()}' WHERE orden_gestion = '{selected_orden}'"))
+                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', inicio_ruta = '{datetime.now()}', tiempo_predicho = {tiempo_estimado} WHERE orden_gestion = '{selected_orden}'"))
                                     conn.commit()
                                 st.success(f"✅ Gestión '{selected_orden}' iniciada y marcada como Activa.")
                                 st.cache_data.clear()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Error al iniciar la ruta: {e}")
-
+                else:
+                    st.warning("El origen y destino no pueden ser iguales.")
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
@@ -377,40 +365,34 @@ elif menu == "Seguimiento de Rutas":
     st.header("🚚 Seguimiento de Rutas")
     
     df_entregas = load_data_from_db()
-    if not df_entregas.empty:
+    ubicaciones_df = st.session_state.get('ubicaciones_df')
+
+    if not df_entregas.empty and ubicaciones_df is not None and not ubicaciones_df.empty:
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
         if not ordenes_activas.empty:
             for index, row in ordenes_activas.iterrows():
                 tiempo_transcurrido = datetime.now() - datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
-                tiempo_restante = timedelta(minutes=row['tiempo_predicho']) - tiempo_transcurrido
+                tiempo_restante_segundos = row['tiempo_predicho'] * 60 - tiempo_transcurrido.total_seconds()
                 
-                if tiempo_restante.total_seconds() < 0:
+                if tiempo_restante_segundos < 0:
                     tiempo_restante_str = "00:00:00"
                     progreso = 1.0
                 else:
-                    total_segundos = int(tiempo_restante.total_seconds())
+                    total_segundos = int(tiempo_restante_segundos)
                     horas = total_segundos // 3600
                     minutos = (total_segundos % 3600) // 60
                     segundos = total_segundos % 60
                     tiempo_restante_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
-                    progreso = 1 - (tiempo_restante.total_seconds() / timedelta(minutes=row['tiempo_predicho']).total_seconds())
+                    progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
+
+                coordenadas = {
+                    loc['ubicacion']: [loc['latitud'], loc['longitud']]
+                    for _, loc in ubicaciones_df.iterrows()
+                }
                 
-                ubicaciones_df = st.session_state.get('ubicaciones_df')
-                if ubicaciones_df is not None and not ubicaciones_df.empty:
-                    coordenadas = {
-                        loc['ubicacion']: [loc['latitud'], loc['longitud']]
-                        for index, loc in ubicaciones_df.iterrows()
-                    }
-                    origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
-                    destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
-                    google_maps_link = f"https://www.google.com/maps/dir/?api=1&origin={origen_coords[0]},{origen_coords[1]}&destination={destino_coords[0]},{destino_coords[1]}"
-                    waze_link = f"https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes"
-                else:
-                    google_maps_link = "#"
-                    waze_link = "#"
-                    origen_coords = [13.7, -89.2]
-                    destino_coords = [13.7, -89.2]
+                origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
+                destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
 
                 st.markdown(f"**Gestión {row['orden_gestion']} - Estado: Activa**")
                 st.info(f"Ruta: **{row['ubicacion']}** -> **{row['destino']}**")
@@ -425,8 +407,8 @@ elif menu == "Seguimiento de Rutas":
                 col_mapas, col_acciones = st.columns([2, 1])
                 with col_mapas:
                     st.markdown(f"**Enlaces rápidos:**")
-                    st.markdown(f"[Abrir en Google Maps]({google_maps_link})", unsafe_allow_html=True)
-                    st.markdown(f"[Abrir en Waze]({waze_link})", unsafe_allow_html=True)
+                    st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})", unsafe_allow_html=True)
+                    st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={row['destino']})", unsafe_allow_html=True)
                 with col_acciones:
                     if st.button("Marcar como Entregado", key=f"entregar_{row['orden_gestion']}"):
                         with engine.connect() as conn:
@@ -439,6 +421,8 @@ elif menu == "Seguimiento de Rutas":
                 st.markdown("---")
         else:
             st.info("No hay gestiones activas en este momento.")
+    else:
+        st.info("Por favor, sube el archivo de ubicaciones y asegúrate de que la base de datos no esté vacía para ver el seguimiento.")
 
 # --- 🗑️ Sección para borrar datos ---
 elif menu == "Borrar Datos":
