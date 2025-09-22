@@ -8,6 +8,9 @@ from streamlit_folium import st_folium
 import random
 from io import StringIO
 import re
+from datetime import datetime
+import smtplib
+from email.message import EmailMessage
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -53,6 +56,7 @@ def check_table_exists():
         except Exception:
             return False
 
+@st.cache_data(ttl=600)
 def load_data_from_db():
     """
     Carga todos los datos de la tabla 'entregas' en un DataFrame.
@@ -287,7 +291,6 @@ elif menu == "Predicción de Rutas":
             
             df_entregas = load_data_from_db()
 
-            # --- 🌟 Opción de Predicción para órdenes pendientes ---
             if not df_entregas.empty:
                 ordenes_pendientes = df_entregas[df_entregas['tiempo_entrega'].isnull()]['orden_gestion'].unique()
                 selected_orden = st.selectbox("Selecciona una orden de gestión pendiente:", [''] + sorted(ordenes_pendientes))
@@ -309,7 +312,6 @@ elif menu == "Predicción de Rutas":
                         }
                         
                         default_coords = [13.7, -89.2]
-                        
                         origen_coords = coordenadas.get(origen_prediccion, default_coords)
                         destino_coords = coordenadas.get(destino_prediccion, default_coords)
                         
