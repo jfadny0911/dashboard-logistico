@@ -8,8 +8,7 @@ from streamlit_folium import st_folium
 import random
 from io import StringIO
 import re
-from datetime import datetime, timedelta
-import time
+from datetime import datetime
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
@@ -75,13 +74,6 @@ def clear_database():
     st.success("🗑️ Todos los datos de la tabla `entregas` han sido eliminados.")
     st.cache_data.clear()
     st.rerun()
-
-def get_next_gestion_number(df):
-    """Obtiene el siguiente número de gestión secuencial."""
-    if 'orden_gestion' in df.columns and not df.empty:
-        max_gestion = df['orden_gestion'].astype(int).max()
-        return max_gestion + 1
-    return 1
 
 # ===============================
 # 📋 Menú lateral
@@ -209,7 +201,8 @@ elif menu == "Ingresar Pedido":
             st.session_state['orden_gestion_nueva'] = ""
 
         if st.button("Generar Gestión"):
-            nueva_gestion = get_next_gestion_number(df)
+            ultima_gestion = df['orden_gestion'].max() if 'orden_gestion' in df.columns and not df.empty else 0
+            nueva_gestion = ultima_gestion + 1
             st.session_state['orden_gestion_nueva'] = f"{nueva_gestion:04d}"
         
         orden_gestion_display = st.text_input("Número de Gestión", value=st.session_state.get('orden_gestion_nueva', ''), disabled=True)
@@ -344,7 +337,17 @@ elif menu == "Predicción de Rutas":
                         
                         st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
                         st.info(f"Condiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}")
+
+                        # Opciones de exportación de la ruta
+                        st.subheader("Opciones de exportación de la ruta")
+                        route_details = f"Ruta: {origen_prediccion} -> {destino_prediccion}\nOrigen Coordenadas: {origen_coords}\nDestino Coordenadas: {destino_coords}\nTiempo estimado: {tiempo_estimado} minutos\nCondiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}"
                         
+                        st.code(route_details, language="text")
+                        st.markdown(f"**Enlaces rápidos:**")
+                        st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})")
+                        st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={destino_prediccion})")
+                        
+                        st.markdown("---")
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
