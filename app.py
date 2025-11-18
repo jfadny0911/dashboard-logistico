@@ -16,6 +16,7 @@ import numpy as np
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
 # ===================================================
+# Asegúrate de configurar esta variable de entorno en tu entorno de despliegue
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
@@ -47,7 +48,7 @@ def read_uploaded_csv_with_encoding(uploaded_file, delimiter=None):
         except pd.errors.ParserError:
             continue
     st.error("❌ Error: No se pudo leer el archivo subido. Verifica la codificación y el delimitador.")
-    return None
+    return None # LÍNEA CORREGIDA PARA ASEGURAR QUE ESTÉ DENTRO DE LA FUNCIÓN
 
 def check_table_exists():
     """
@@ -145,7 +146,7 @@ if menu == "Ver Datos":
                         ]
                         
                         # Divide la columna fusionada usando la coma (la coma estaba protegida por comillas)
-                        split_cols = df_to_load[corrupt_col_name].str.split(',', expand=True)
+                        split_cols = df_to_load[corrupt_col_name].astype(str).str.split(',', expand=True)
                         
                         if split_cols.shape[1] >= len(new_split_names):
                             # Toma solo los campos necesarios y asigna nombres
