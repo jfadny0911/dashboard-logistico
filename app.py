@@ -16,7 +16,6 @@ import numpy as np
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
 # ===================================================
-# Asegúrate de configurar esta variable de entorno en tu entorno de despliegue
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
@@ -64,13 +63,20 @@ def check_table_exists():
 @st.cache_data(ttl=600)
 def load_data_from_db():
     """
-    Carga todos los datos de la tabla 'entregas' en un DataFrame.
+    Carga todos los datos de la tabla 'entregas' en un DataFrame y normaliza los nombres de columna.
     """
     if check_table_exists():
         with engine.connect() as conn:
-            # Intenta leer la tabla. Si falla por estructura (columnas), devuelve un DataFrame vacío.
             try:
-                return pd.read_sql_table('entregas', conn)
+                df = pd.read_sql_table('entregas', conn)
+                
+                # Aplicación de normalización de columnas al leer de la BD
+                df.columns = [
+                    re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
+                    for col in df.columns
+                ]
+                
+                return df
             except Exception:
                 return pd.DataFrame()
     return pd.DataFrame()
@@ -115,15 +121,54 @@ if menu == "Ver Datos":
         st.warning("⚠️ Al subir un archivo, se **reemplazará** la tabla `entregas` completa en la base de datos.")
         if st.button("➕ Guardar base de datos"):
             try:
-                df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
+                # 1. Intentar leer usando coma (,) como delimitador
+                df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=',')
                 if df_to_load is not None:
+                    
                     # Normalizar nombres de columnas
                     df_to_load.columns = [
                         re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
                         for col in df_to_load.columns
                     ]
                     
-                    # Verificar y agregar columnas si no existen
+                    # **INICIO DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
+                    # 2. Verifica si la columna 'departamento' falta (indicando columnas fusionadas)
+                    if 'departamento' not in df_to_load.columns and df_to_load.shape[1] > 1:
+                        st.warning("Detectado CSV mal formado (columnas fusionadas). Intentando reestructurar...")
+                        
+                        corrupt_col_name = df_to_load.columns[0]
+                        
+                        # Campos esperados en la columna fusionada (Asumiendo 11 campos iniciales)
+                        new_split_names = [
+                            'ubicacion', 'municipio', 'departamento', 'fecha', 'hora', 
+                            'zona', 'tipo_pedido', 'clima', 'trafico', 'tiempo_entrega', 'retraso'
+                        ]
+                        
+                        # Divide la columna fusionada usando la coma (la coma estaba protegida por comillas)
+                        split_cols = df_to_load[corrupt_col_name].str.split(',', expand=True)
+                        
+                        if split_cols.shape[1] >= len(new_split_names):
+                            # Toma solo los campos necesarios y asigna nombres
+                            split_cols = split_cols.iloc[:, :len(new_split_names)]
+                            split_cols.columns = new_split_names
+                            
+                            # Concatenar los campos corregidos con el resto de las columnas
+                            df_processed = pd.concat([split_cols, df_to_load.iloc[:, 1:].reset_index(drop=True)], axis=1)
+                            
+                            # Normalizar nombres de columna nuevamente después de la concatenación
+                            df_processed.columns = [
+                                re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
+                                for col in df_processed.columns
+                            ]
+                            
+                            df_to_load = df_processed
+                            st.success("CSV reestructurado con éxito.")
+                        else:
+                            st.error("Error: No se pudo reestructurar el CSV. El número de campos esperados no coincide. Por favor, revisa el formato de tu archivo.")
+                            return 
+                    # **FIN DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
+                    
+                    # Verificar y agregar columnas si no existen (Lógica estándar)
                     if 'orden_gestion' not in df_to_load.columns:
                         df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
                         st.info("Columna 'orden_gestion' agregada automáticamente.")
@@ -132,7 +177,6 @@ if menu == "Ver Datos":
                         df_to_load['estado'] = 'Pendiente'
                         st.info("Columna 'estado' agregada automáticamente.")
                         
-                    # Asegura que la columna 'repartidor' exista y se asigne valor por defecto
                     if 'repartidor' not in df_to_load.columns:
                         df_to_load['repartidor'] = [random.choice(REPARTIDORES) for _ in range(len(df_to_load))]
                         st.info("Columna 'repartidor' agregada automáticamente (simulada).")
@@ -149,7 +193,6 @@ if menu == "Ver Datos":
                         df_to_load['tiempo_predicho'] = None
                     
                     with engine.connect() as conn:
-                        # 'replace' garantiza que se recree la tabla con la estructura correcta
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False) 
                         conn.commit()
                     st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
@@ -173,9 +216,9 @@ elif menu == "KPIs":
     df = load_data_from_db()
     
     if not df.empty:
-        # Verifica la existencia de columnas clave para evitar errores al inicio
+        # Verifica la existencia de columnas clave para evitar errores
         if 'departamento' not in df.columns or 'municipio' not in df.columns or 'tipo_pedido' not in df.columns:
-            st.error("Error de datos: Faltan columnas clave ('departamento', 'municipio', 'tipo_pedido'). Por favor, asegúrate de que el CSV subido sea correcto.")
+            st.error("Error de datos: Faltan columnas clave ('departamento', 'municipio', 'tipo_pedido'). Por favor, asegúrate de que el CSV subido sea correcto y que el proceso de carga se haya completado sin errores.")
             st.stop()
 
         total_registros = len(df)
@@ -192,6 +235,7 @@ elif menu == "KPIs":
 
         st.subheader("Filtros para análisis detallado")
         
+        # Filtro de Repartidor
         col_select_repartidor = st.selectbox(
             'Selecciona el Repartidor:',
             options=['Todos'] + (sorted(df['repartidor'].unique()) if 'repartidor' in df.columns else [])
@@ -501,7 +545,6 @@ elif menu == "Seguimiento de Rutas":
     if not df_entregas.empty and ubicaciones_df is not None and not ubicaciones_df.empty:
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
-        # CORRECCIÓN DE KEYERROR: Se verifica si la columna existe antes de usarla
         if 'repartidor' not in ordenes_activas.columns:
             st.error("Error: La base de datos no tiene la columna 'repartidor'. Por favor, **borra y sube tus datos nuevamente** en la sección 'Ver Datos' para actualizar la estructura.")
             st.stop()
@@ -553,9 +596,12 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-                # Coordenadas para enlaces (Se debe asegurar que el DF de ubicaciones se limpió en la sección de Predicciones)
+                # Coordenadas para enlaces
+                # Limpiamos las coordenadas aquí también, ya que la sesión puede perder el estado limpio
                 ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
                 if ubicaciones_df_cleaned is not None:
+                     ubicaciones_df_cleaned['latitud'] = ubicaciones_df_cleaned['latitud'].apply(clean_coord)
+                     ubicaciones_df_cleaned['longitud'] = ubicaciones_df_cleaned['longitud'].apply(clean_coord)
                      ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
                      ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
