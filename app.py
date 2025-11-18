@@ -390,8 +390,8 @@ elif menu == "Predicción de Rutas":
     st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
     
     st.markdown("""
-    **🚨 ¡Atención! Para que los mapas y la predicción funcionen, debes subir aquí un archivo CSV con las coordenadas.**
-    Este archivo debe contener, al menos, las columnas: **`Ubicación`**, **`Latitud`** y **`Longitud`** (¡solo ubicaciones únicas!).
+    **🚨 ¡Atención! Para que los mapas y la predicción funcionen, debes subir aquí un archivo CSV con las coordenadas de tus ubicaciones únicas.**
+    Este archivo debe contener las columnas: **`Ubicación`**, **`Latitud`** y **`Longitud`**.
     """)
     uploaded_file = st.file_uploader("Sube el archivo de ubicaciones con coordenadas (CSV)", type=["csv"], key="ubicaciones_file_uploader")
     
