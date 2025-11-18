@@ -16,6 +16,7 @@ import numpy as np
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
 # ===================================================
+# Asegúrate de configurar esta variable de entorno en tu entorno de despliegue
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
@@ -67,7 +68,11 @@ def load_data_from_db():
     """
     if check_table_exists():
         with engine.connect() as conn:
-            return pd.read_sql_table('entregas', conn)
+            # Intenta leer la tabla. Si falla por estructura (columnas), devuelve un DataFrame vacío.
+            try:
+                return pd.read_sql_table('entregas', conn)
+            except Exception:
+                return pd.DataFrame()
     return pd.DataFrame()
 
 def clear_database():
@@ -127,6 +132,7 @@ if menu == "Ver Datos":
                         df_to_load['estado'] = 'Pendiente'
                         st.info("Columna 'estado' agregada automáticamente.")
                         
+                    # Asegura que la columna 'repartidor' exista y se asigne valor por defecto
                     if 'repartidor' not in df_to_load.columns:
                         df_to_load['repartidor'] = [random.choice(REPARTIDORES) for _ in range(len(df_to_load))]
                         st.info("Columna 'repartidor' agregada automáticamente (simulada).")
@@ -143,7 +149,8 @@ if menu == "Ver Datos":
                         df_to_load['tiempo_predicho'] = None
                     
                     with engine.connect() as conn:
-                        df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
+                        # 'replace' garantiza que se recree la tabla con la estructura correcta
+                        df_to_load.to_sql('entregas', conn, if_exists='replace', index=False) 
                         conn.commit()
                     st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
                     st.cache_data.clear()
@@ -166,6 +173,11 @@ elif menu == "KPIs":
     df = load_data_from_db()
     
     if not df.empty:
+        # Verifica la existencia de columnas clave para evitar errores al inicio
+        if 'departamento' not in df.columns or 'municipio' not in df.columns or 'tipo_pedido' not in df.columns:
+            st.error("Error de datos: Faltan columnas clave ('departamento', 'municipio', 'tipo_pedido'). Por favor, asegúrate de que el CSV subido sea correcto.")
+            st.stop()
+
         total_registros = len(df)
         
         col1, col2, col3 = st.columns(3)
@@ -180,7 +192,6 @@ elif menu == "KPIs":
 
         st.subheader("Filtros para análisis detallado")
         
-        # Filtro de Repartidor
         col_select_repartidor = st.selectbox(
             'Selecciona el Repartidor:',
             options=['Todos'] + (sorted(df['repartidor'].unique()) if 'repartidor' in df.columns else [])
@@ -240,7 +251,6 @@ elif menu == "KPIs":
                                              color='tipo_pedido')
             st.plotly_chart(fig_distribucion, use_container_width=True)
 
-            # KPI: Rendimiento por Repartidor
             if 'repartidor' in filtered_df.columns and len(filtered_df['repartidor'].unique()) > 1:
                  df_repartidor = filtered_df.groupby('repartidor')['tiempo_entrega'].mean().reset_index()
                  fig_repartidor = px.bar(df_repartidor, x='repartidor', y='tiempo_entrega',
@@ -280,7 +290,6 @@ elif menu == "Ingresar Pedido":
             selected_municipio = st.selectbox("Municipio", municipios)
             tipos_pedido = sorted(df['tipo_pedido'].unique())
             selected_tipo_pedido = st.selectbox("Tipo de Pedido", tipos_pedido)
-            # <-- Campo Repartidor
             selected_repartidor = st.selectbox("Repartidor Asignado", REPARTIDORES) 
         
         with col2:
@@ -492,14 +501,14 @@ elif menu == "Seguimiento de Rutas":
     if not df_entregas.empty and ubicaciones_df is not None and not ubicaciones_df.empty:
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
-        # Corrección del KeyError: Verificar si la columna existe antes de intentar usarla
+        # CORRECCIÓN DE KEYERROR: Se verifica si la columna existe antes de usarla
         if 'repartidor' not in ordenes_activas.columns:
             st.error("Error: La base de datos no tiene la columna 'repartidor'. Por favor, **borra y sube tus datos nuevamente** en la sección 'Ver Datos' para actualizar la estructura.")
             st.stop()
         
         if not ordenes_activas.empty:
             
-            # <-- Filtro por Repartidor
+            # Filtro por Repartidor
             repartidores_activos = ordenes_activas['repartidor'].unique()
             selected_repartidor_seguimiento = st.selectbox(
                 "Filtrar por Repartidor:",
@@ -544,16 +553,16 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-                # Coordenadas para enlaces
-                ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord)
-                ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord)
-                ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
-                ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
+                # Coordenadas para enlaces (Se debe asegurar que el DF de ubicaciones se limpió en la sección de Predicciones)
+                ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
+                if ubicaciones_df_cleaned is not None:
+                     ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
+                     ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
-                coordenadas = {
-                    loc['ubicacion']: [loc['latitud'], loc['longitud']]
-                    for _, loc in ubicaciones_df.iterrows()
-                }
+                     coordenadas = {
+                        loc['ubicacion']: [loc['latitud'], loc['longitud']]
+                        for _, loc in ubicaciones_df_cleaned.iterrows()
+                     }
                 
                 origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
                 destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
