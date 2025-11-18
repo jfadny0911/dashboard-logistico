@@ -140,7 +140,7 @@ if menu == "Ver Datos":
         st.warning("⚠️ Al subir un archivo, se **reemplazará** la tabla `entregas` completa en la base de datos.")
         if st.button("➕ Guardar base de datos"):
             try:
-                # Intentar leer usando coma (,) como delimitador
+                # 1. Intentar leer usando coma (,) como delimitador
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=',')
                 if df_to_load is not None:
                     
@@ -391,7 +391,7 @@ elif menu == "Predicción de Rutas":
     
     st.markdown("""
     **🚨 ¡Atención! Para que los mapas y la predicción funcionen, debes subir aquí un archivo CSV con las coordenadas.**
-    Este archivo debe contener, al menos, las columnas: **`Ubicación`**, **`Latitud`** y **`Longitud`**.
+    Este archivo debe contener, al menos, las columnas: **`Ubicación`**, **`Latitud`** y **`Longitud`** (¡solo ubicaciones únicas!).
     """)
     uploaded_file = st.file_uploader("Sube el archivo de ubicaciones con coordenadas (CSV)", type=["csv"], key="ubicaciones_file_uploader")
     
