@@ -48,7 +48,8 @@ def read_uploaded_csv_with_encoding(uploaded_file, delimiter=None):
         except pd.errors.ParserError:
             continue
     st.error("❌ Error: No se pudo leer el archivo subido. Verifica la codificación y el delimitador.")
-    return None # LÍNEA CORREGIDA PARA ASEGURAR QUE ESTÉ DENTRO DE LA FUNCIÓN
+    # ESTE RETURN DEBE ESTAR INDENTADO DENTRO DE LA FUNCIÓN
+    return None 
 
 def check_table_exists():
     """
