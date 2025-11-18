@@ -20,6 +20,9 @@ DATABASE_URL = os.getenv(
 )
 engine = create_engine(DATABASE_URL)
 
+# Lista de repartidores disponibles (para simulación)
+REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
+
 # Configuración de página
 st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
 st.title("📦 Dashboard Predictivo - ChivoFast")
@@ -79,8 +82,11 @@ def clear_database():
 def get_next_gestion_number(df):
     """Obtiene el siguiente número de gestión secuencial."""
     if 'orden_gestion' in df.columns and not df.empty:
-        max_gestion = df['orden_gestion'].astype(int).max()
-        return max_gestion + 1
+        # Asegura que la columna sea numérica para la max, ignorando errores
+        max_gestion = pd.to_numeric(df['orden_gestion'], errors='coerce').max()
+        if pd.isna(max_gestion):
+            return 1
+        return int(max_gestion) + 1
     return 1
 
 # ===============================
@@ -97,8 +103,11 @@ if menu == "Ver Datos":
         st.warning("⚠️ Al subir un archivo, se **reemplazará** la tabla `entregas` completa en la base de datos.")
         if st.button("➕ Guardar base de datos"):
             try:
+                # Intentar leer el CSV, el delimitador '; ' es muy específico
+                # Se mantiene para coherencia con el código original, pero se recomienda usar None para detección automática
                 df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
                 if df_to_load is not None:
+                    # Normalizar nombres de columnas
                     df_to_load.columns = [
                         re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
                         for col in df_to_load.columns
@@ -108,10 +117,14 @@ if menu == "Ver Datos":
                     if 'orden_gestion' not in df_to_load.columns:
                         df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
                         st.info("Columna 'orden_gestion' agregada automáticamente.")
-                    
+                        
                     if 'estado' not in df_to_load.columns:
                         df_to_load['estado'] = 'Pendiente'
                         st.info("Columna 'estado' agregada automáticamente.")
+                        
+                    if 'repartidor' not in df_to_load.columns: # **<-- Nuevo campo Repartidor**
+                        df_to_load['repartidor'] = random.choice(REPARTIDORES)
+                        st.info("Columna 'repartidor' agregada automáticamente (simulada).")
                         
                     if 'inicio_ruta' not in df_to_load.columns:
                         df_to_load['inicio_ruta'] = None
@@ -125,7 +138,8 @@ if menu == "Ver Datos":
                         df_to_load['tiempo_predicho'] = None
                     
                     with engine.connect() as conn:
-                        conn.execute(text("TRUNCATE TABLE entregas"))
+                        # Para evitar problemas con el TRUNCATE si la tabla no se ha creado con todas las columnas.
+                        # Mejor usar if_exists='replace' para asegurar la estructura.
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
                         conn.commit()
                     st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
@@ -164,6 +178,12 @@ elif menu == "KPIs":
         st.subheader("Filtros para análisis detallado")
         col_select_departamento, col_select_municipio, col_select_tipo_pedido = st.columns(3)
         
+        # Se añaden las métricas de repartidor aquí para su visualización
+        col_select_repartidor = st.selectbox(
+            'Selecciona el Repartidor:',
+            options=['Todos'] + sorted(df['repartidor'].unique())
+        )
+
         with col_select_departamento:
             selected_departamento = st.selectbox(
                 'Selecciona el Departamento:',
@@ -190,28 +210,42 @@ elif menu == "KPIs":
             (df['tipo_pedido'] == selected_tipo_pedido)
         ]
 
+        if col_select_repartidor != 'Todos':
+            filtered_df = filtered_df[filtered_df['repartidor'] == col_select_repartidor]
+
         if not filtered_df.empty:
             st.markdown("---")
             st.subheader(f"Análisis para {selected_tipo_pedido} en {selected_municipio}, {selected_departamento}")
             
             fig_clima = px.box(filtered_df, x='clima', y='tiempo_entrega',
-                            title='Tiempo de Entrega por Clima',
-                            labels={'clima': 'Clima', 'tiempo_entrega': 'Tiempo de Entrega (min)'},
-                            color='clima')
+                                 title='Tiempo de Entrega por Clima',
+                                 labels={'clima': 'Clima', 'tiempo_entrega': 'Tiempo de Entrega (min)'},
+                                 color='clima')
             st.plotly_chart(fig_clima, use_container_width=True)
 
             df_retraso_trafico = filtered_df.groupby('trafico')['retraso'].mean().reset_index()
             fig_trafico = px.bar(df_retraso_trafico, x='trafico', y='retraso',
-                                title='Retraso Promedio por Tráfico',
-                                labels={'trafico': 'Nivel de Tráfico', 'retraso': 'Retraso Promedio (min)'},
-                                color='trafico')
+                                 title='Retraso Promedio por Tráfico',
+                                 labels={'trafico': 'Nivel de Tráfico', 'retraso': 'Retraso Promedio (min)'},
+                                 color='trafico')
             st.plotly_chart(fig_trafico, use_container_width=True)
             
             fig_distribucion = px.histogram(filtered_df, x='tiempo_entrega', nbins=20,
-                                            title='Distribución del Tiempo de Entrega',
-                                            labels={'tiempo_entrega': 'Tiempo de Entrega (min)'},
-                            color='tipo_pedido')
+                                             title='Distribución del Tiempo de Entrega',
+                                             labels={'tiempo_entrega': 'Tiempo de Entrega (min)'},
+                                             color='tipo_pedido')
             st.plotly_chart(fig_distribucion, use_container_width=True)
+
+            # Nuevo KPI: Rendimiento por Repartidor (Si hay suficientes datos)
+            if 'repartidor' in filtered_df.columns and len(filtered_df['repartidor'].unique()) > 1:
+                 df_repartidor = filtered_df.groupby('repartidor')['tiempo_entrega'].mean().reset_index()
+                 fig_repartidor = px.bar(df_repartidor, x='repartidor', y='tiempo_entrega',
+                                     title='Promedio de Tiempo de Entrega por Repartidor',
+                                     labels={'repartidor': 'Repartidor', 'tiempo_entrega': 'Tiempo Promedio (min)'},
+                                     color='repartidor')
+                 st.plotly_chart(fig_repartidor, use_container_width=True)
+
+
         else:
             st.warning("No hay datos para la combinación de filtros seleccionada.")
     else:
@@ -242,6 +276,8 @@ elif menu == "Ingresar Pedido":
             selected_municipio = st.selectbox("Municipio", municipios)
             tipos_pedido = sorted(df['tipo_pedido'].unique())
             selected_tipo_pedido = st.selectbox("Tipo de Pedido", tipos_pedido)
+            # **<-- Nuevo campo Repartidor**
+            selected_repartidor = st.selectbox("Repartidor Asignado", REPARTIDORES) 
         
         with col2:
             ubicaciones_en_municipio = sorted(df[(df['departamento'] == selected_departamento) & (df['municipio'] == selected_municipio)]['ubicacion'].unique())
@@ -274,7 +310,7 @@ elif menu == "Ingresar Pedido":
                     nueva_fila = pd.DataFrame([{
                         'orden_gestion': orden_gestion_display,
                         'fecha': datetime.now(),
-                        'zona': selected_departamento,
+                        'zona': selected_departamento, # Se mantiene por compatibilidad si existe en BD
                         'tipo_pedido': selected_tipo_pedido,
                         'clima': selected_clima,
                         'trafico': selected_trafico,
@@ -286,7 +322,8 @@ elif menu == "Ingresar Pedido":
                         'estado': 'Pendiente',
                         'inicio_ruta': None,
                         'destino': None,
-                        'tiempo_predicho': None
+                        'tiempo_predicho': st.session_state.get('prediccion'), # Usar la predicción calculada
+                        'repartidor': selected_repartidor # **<-- Nuevo campo Repartidor**
                     }])
                     
                     with engine.connect() as conn:
@@ -306,25 +343,37 @@ elif menu == "Predicción de Rutas":
     
     if uploaded_file is not None:
         try:
-            ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file, delimiter=';')
+            # Se usa el delimitador None para que pandas intente detectarlo (más robusto)
+            ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file)
             st.session_state['ubicaciones_df'] = ubicaciones_df
         except Exception as e:
             st.error(f"❌ Error al procesar el archivo: {e}")
 
     if 'ubicaciones_df' in st.session_state and st.session_state['ubicaciones_df'] is not None:
-        ubicaciones_df = st.session_state['ubicaciones_df']
+        ubicaciones_df = st.session_state['ubicaciones_df'].copy()
         
+        # Normalización de columnas del archivo de ubicaciones
         ubicaciones_df.columns = [
-            re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n'))
+            re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
             for col in ubicaciones_df.columns
         ]
         
-        if 'ubicacion' not in ubicaciones_df.columns or 'latitud' not in ubicaciones_df.columns or 'longitud' not in ubicaciones_df.columns:
+        # Mapeo de nombres de columnas comunes
+        col_map = {'ubicacion': 'ubicacion', 'latitud': 'latitud', 'longitud': 'longitud'}
+        
+        if not all(col in ubicaciones_df.columns for col in col_map.values()):
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
-            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
-            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].astype(str).str.replace('° N', '').str.replace('° O', '').str.strip().astype(float)
+            # Limpieza y conversión de coordenadas
+            def clean_coord(coord):
+                return str(coord).replace('° N', '').replace('° O', '').strip()
+
+            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord).astype(float, errors='ignore')
+            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord).astype(float, errors='ignore')
             
+            # Limpiar filas con NaN después de la conversión
+            ubicaciones_df.dropna(subset=['latitud', 'longitud'], inplace=True)
+
             todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
             
             df_entregas = load_data_from_db()
@@ -338,7 +387,7 @@ elif menu == "Predicción de Rutas":
                     origen_prediccion = orden_data['ubicacion']
                     
                     st.subheader(f"Ruta para la orden '{selected_orden}':")
-                    st.info(f"Origen: {origen_prediccion}")
+                    st.info(f"Origen: {origen_prediccion} | Repartidor asignado: **{orden_data.get('repartidor', 'N/A')}**")
                     
                     todas_ubicaciones_sin_origen = [ubic for ubic in todas_ubicaciones if ubic != origen_prediccion]
                     destino_prediccion = st.selectbox("Selecciona el destino:", todas_ubicaciones_sin_origen, key="destino_prediccion")
@@ -359,6 +408,7 @@ elif menu == "Predicción de Rutas":
                         folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
                         st_folium(mapa, width=700, height=500)
                         
+                        # Cálculo de tiempo estimado (simulación)
                         base_time = 30
                         if orden_data['trafico'] == 'Medio': base_time += 15
                         elif orden_data['trafico'] == 'Alto': base_time += 30
@@ -371,15 +421,25 @@ elif menu == "Predicción de Rutas":
                         if st.button("Iniciar Ruta"):
                             try:
                                 with engine.connect() as conn:
-                                    conn.execute(text(f"UPDATE entregas SET estado = 'Activa', inicio_ruta = '{datetime.now()}', destino = '{destino_prediccion}', tiempo_predicho = {tiempo_estimado} WHERE orden_gestion = '{selected_orden}'"))
+                                    conn.execute(text(f"""
+                                        UPDATE entregas 
+                                        SET estado = 'Activa', 
+                                            inicio_ruta = '{datetime.now()}', 
+                                            destino = '{destino_prediccion}', 
+                                            tiempo_predicho = {tiempo_estimado},
+                                            repartidor = '{orden_data.get('repartidor', 'N/A')}'
+                                        WHERE orden_gestion = '{selected_orden}'
+                                    """))
                                     conn.commit()
                                 st.success(f"✅ Gestión '{selected_orden}' iniciada y marcada como Activa.")
                                 st.cache_data.clear()
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Error al iniciar la ruta: {e}")
-                else:
-                    st.warning("El origen y destino no pueden ser iguales.")
+                    else:
+                        st.warning("El origen y destino no pueden ser iguales o la ubicación de origen no está en la lista de ubicaciones.")
+            else:
+                st.info("No hay datos en la base de datos para mostrar las predicciones de ruta.")
     else:
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
@@ -394,10 +454,32 @@ elif menu == "Seguimiento de Rutas":
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
         if not ordenes_activas.empty:
+            
+            # **<-- Nuevo filtro por Repartidor**
+            repartidores_activos = ordenes_activas['repartidor'].unique()
+            selected_repartidor_seguimiento = st.selectbox(
+                "Filtrar por Repartidor:",
+                options=['Todos'] + sorted(repartidores_activos)
+            )
+            
+            if selected_repartidor_seguimiento != 'Todos':
+                ordenes_activas = ordenes_activas[ordenes_activas['repartidor'] == selected_repartidor_seguimiento]
+
+            if ordenes_activas.empty:
+                st.info("No hay gestiones activas para el repartidor seleccionado.")
+                st.stop()
+
             for index, row in ordenes_activas.iterrows():
-                tiempo_transcurrido = datetime.now() - datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
+                try:
+                    inicio_ruta_dt = datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
+                except ValueError:
+                    # En caso de que el formato sea solo fecha
+                    inicio_ruta_dt = datetime.strptime(str(row['inicio_ruta']).split()[0], "%Y-%m-%d")
+
+                tiempo_transcurrido = datetime.now() - inicio_ruta_dt
                 tiempo_restante_segundos = row['tiempo_predicho'] * 60 - tiempo_transcurrido.total_seconds()
                 
+                # **<-- Lógica para simular movimiento en el tiempo de entrega**
                 if tiempo_restante_segundos < 0:
                     tiempo_restante_str = "00:00:00"
                     progreso = 1.0
@@ -407,8 +489,11 @@ elif menu == "Seguimiento de Rutas":
                     minutos = (total_segundos % 3600) // 60
                     segundos = total_segundos % 60
                     tiempo_restante_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+                    
+                    # Progreso de 0.0 a 1.0
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
-
+                
+                # Coordenadas para el mapa (aunque el mapa no se renderice aquí, se usa para enlaces)
                 coordenadas = {
                     loc['ubicacion']: [loc['latitud'], loc['longitud']]
                     for _, loc in ubicaciones_df.iterrows()
@@ -417,20 +502,24 @@ elif menu == "Seguimiento de Rutas":
                 origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
                 destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
 
-                st.markdown(f"**Gestión {row['orden_gestion']} - Estado: Activa**")
+                st.markdown(f"**Gestión {row['orden_gestion']} - Repartidor: {row['repartidor']}**") # **<-- Muestra Repartidor**
                 st.info(f"Ruta: **{row['ubicacion']}** -> **{row['destino']}**")
                 st.markdown(f"**Tipo de Pedido:** {row['tipo_pedido']} | **Clima:** {row['clima']} | **Tráfico:** {row['trafico']}")
                 
                 col_progreso, col_tiempo = st.columns([3, 1])
                 with col_progreso:
-                    st.progress(progreso, text="Progreso de la ruta")
+                    st.progress(progreso, text=f"Progreso de la ruta ({int(progreso * 100)}%)")
                 with col_tiempo:
                     st.metric("Tiempo Restante", tiempo_restante_str)
 
+                # **<-- Simulación de movimiento**
+                # El "movimiento" se refleja en la barra de progreso y el tiempo restante
+                # No se simula la posición geográfica intermedia sin un servicio de ruteo real.
+                
                 col_mapas, col_acciones = st.columns([2, 1])
                 with col_mapas:
                     st.markdown(f"**Enlaces rápidos:**")
-                    st.markdown(f"[Abrir en Google Maps](https://www.google.com/maps/dir/{origen_coords[0]},{origen_coords[1]}/{destino_coords[0]},{destino_coords[1]})", unsafe_allow_html=True)
+                    st.markdown(f"[Abrir en Google Maps](http://maps.google.com/maps?saddr={origen_coords[0]},{origen_coords[1]}&daddr={destino_coords[0]},{destino_coords[1]})", unsafe_allow_html=True)
                     st.markdown(f"[Abrir en Waze](https://waze.com/ul?ll={destino_coords[0]},{destino_coords[1]}&navigate=yes&q={row['destino']})", unsafe_allow_html=True)
                 with col_acciones:
                     if st.button("Marcar como Entregado", key=f"entregar_{row['orden_gestion']}"):
