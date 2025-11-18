@@ -5,16 +5,18 @@ from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
 from streamlit_folium import st_folium
-from folium.plugins import HeatMap # <-- Importación necesaria
+from folium.plugins import HeatMap 
 import random
 from io import StringIO
 import re
 from datetime import datetime, timedelta
 import time
+import numpy as np 
 
 # ===============================
 # 🔗 Conexión a la base de datos PostgreSQL de Render
 # ===================================================
+# Asegúrate de configurar esta variable de entorno en tu entorno de despliegue
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
@@ -46,7 +48,7 @@ def read_uploaded_csv_with_encoding(uploaded_file, delimiter=None):
         except pd.errors.ParserError:
             continue
     st.error("❌ Error: No se pudo leer el archivo subido. Verifica la codificación y el delimitador.")
-    return None
+    return None 
 
 def check_table_exists():
     """
@@ -54,19 +56,30 @@ def check_table_exists():
     """
     with engine.connect() as conn:
         try:
-            conn.execute(text("SELECT 1 FROM entregas LIMIT 1"))
-            return True
+            result = conn.execute(text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'entregas')"))
+            return result.scalar()
         except Exception:
             return False
 
 @st.cache_data(ttl=600)
 def load_data_from_db():
     """
-    Carga todos los datos de la tabla 'entregas' en un DataFrame.
+    Carga todos los datos de la tabla 'entregas' en un DataFrame y normaliza los nombres de columna.
     """
     if check_table_exists():
         with engine.connect() as conn:
-            return pd.read_sql_table('entregas', conn)
+            try:
+                df = pd.read_sql_table('entregas', conn)
+                
+                # Aplicación de normalización de columnas al leer de la BD
+                df.columns = [
+                    re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
+                    for col in df.columns
+                ]
+                
+                return df
+            except Exception:
+                return pd.DataFrame()
     return pd.DataFrame()
 
 def clear_database():
@@ -83,12 +96,17 @@ def clear_database():
 def get_next_gestion_number(df):
     """Obtiene el siguiente número de gestión secuencial."""
     if 'orden_gestion' in df.columns and not df.empty:
-        # Asegura que la columna sea numérica para la max, ignorando errores
         max_gestion = pd.to_numeric(df['orden_gestion'], errors='coerce').max()
         if pd.isna(max_gestion):
             return 1
         return int(max_gestion) + 1
     return 1
+
+def clean_coord(coord):
+    """Limpia y normaliza cadenas de coordenadas."""
+    if pd.isna(coord) or not str(coord).strip():
+        return None 
+    return str(coord).replace('° N', '').replace('° O', '').strip()
 
 # ===============================
 # 📋 Menú lateral
@@ -99,22 +117,78 @@ menu = st.sidebar.radio("Menú", ["Ver Datos", "KPIs", "Ingresar Pedido", "Predi
 if menu == "Ver Datos":
     st.header("📋 Datos almacenados")
     
+    # GUÍA DE COLUMNAS AÑADIDA AQUÍ
+    st.subheader("💡 Guía de Estructura de Archivo CSV/Excel")
+    st.markdown("""
+    Tu archivo CSV debe contener **al menos** las siguientes columnas para que la aplicación funcione correctamente (el orden es flexible). 
+    Asegúrate de que los nombres de las columnas que contienen la ubicación y las coordenadas estén presentes.
+    """)
+    
+    # Tabla con la guía de formato
+    guide_data = {
+        "Columna Clave": ["Ubicación", "Municipio", "Departamento", "Latitud", "Longitud", "Tipo de Pedido", "Clima", "Tráfico", "Tiempo de Entrega", "Retraso"],
+        "Nombre del Sistema": ["ubicacion", "municipio", "departamento", "latitud", "longitud", "tipo_pedido", "clima", "trafico", "tiempo_entrega", "retraso"],
+        "Formato Requerido": ["Texto", "Texto", "Texto (ej: San Salvador)", "Número Decimal (ej: 13.70)", "Número Decimal (ej: -89.23)", "Texto", "Texto", "Texto (Bajo, Medio, Alto)", "Número (minutos)", "Número (minutos)"],
+    }
+    guide_df = pd.DataFrame(guide_data)
+    st.dataframe(guide_df, hide_index=True)
+
+    st.markdown("---")
+    
+    # Lógica de carga de archivo
     uploaded_db_file = st.file_uploader("Sube tu base de datos de entregas (CSV)", type=["csv"], key="db_file_uploader")
     if uploaded_db_file is not None:
         st.warning("⚠️ Al subir un archivo, se **reemplazará** la tabla `entregas` completa en la base de datos.")
         if st.button("➕ Guardar base de datos"):
             try:
-                # Intentar leer el CSV, el delimitador '; ' es muy específico
-                # Se mantiene para coherencia con el código original, pero se recomienda usar None para detección automática
-                df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=';')
+                # 1. Intentar leer usando coma (,) como delimitador
+                df_to_load = read_uploaded_csv_with_encoding(uploaded_db_file, delimiter=',')
                 if df_to_load is not None:
+                    
                     # Normalizar nombres de columnas
                     df_to_load.columns = [
                         re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
                         for col in df_to_load.columns
                     ]
                     
-                    # Verificar y agregar columnas si no existen
+                    # **INICIO DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
+                    # 2. Verifica si la columna 'departamento' falta (indicando columnas fusionadas)
+                    if 'departamento' not in df_to_load.columns and df_to_load.shape[1] > 1:
+                        st.warning("Detectado CSV mal formado (columnas fusionadas). Intentando reestructurar...")
+                        
+                        corrupt_col_name = df_to_load.columns[0]
+                        
+                        # Campos esperados en la columna fusionada (Asumiendo 11 campos iniciales)
+                        new_split_names = [
+                            'ubicacion', 'municipio', 'departamento', 'fecha', 'hora', 
+                            'zona', 'tipo_pedido', 'clima', 'trafico', 'tiempo_entrega', 'retraso'
+                        ]
+                        
+                        # Divide la columna fusionada usando la coma (la coma estaba protegida por comillas)
+                        split_cols = df_to_load[corrupt_col_name].astype(str).str.split(',', expand=True)
+                        
+                        if split_cols.shape[1] >= len(new_split_names):
+                            # Toma solo los campos necesarios y asigna nombres
+                            split_cols = split_cols.iloc[:, :len(new_split_names)]
+                            split_cols.columns = new_split_names
+                            
+                            # Concatenar los campos corregidos con el resto de las columnas
+                            df_processed = pd.concat([split_cols, df_to_load.iloc[:, 1:].reset_index(drop=True)], axis=1)
+                            
+                            # Normalizar nombres de columna nuevamente después de la concatenación
+                            df_processed.columns = [
+                                re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
+                                for col in df_processed.columns
+                            ]
+                            
+                            df_to_load = df_processed
+                            st.success("CSV reestructurado con éxito.")
+                        else:
+                            st.error("Error: No se pudo reestructurar el CSV. El número de campos esperados no coincide. Por favor, revisa el formato de tu archivo.")
+                            return 
+                    # **FIN DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
+                    
+                    # Verificar y agregar columnas si no existen (Lógica estándar)
                     if 'orden_gestion' not in df_to_load.columns:
                         df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
                         st.info("Columna 'orden_gestion' agregada automáticamente.")
@@ -139,7 +213,7 @@ if menu == "Ver Datos":
                         df_to_load['tiempo_predicho'] = None
                     
                     with engine.connect() as conn:
-                        df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
+                        df_to_load.to_sql('entregas', conn, if_exists='replace', index=False) 
                         conn.commit()
                     st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
                     st.cache_data.clear()
@@ -162,6 +236,11 @@ elif menu == "KPIs":
     df = load_data_from_db()
     
     if not df.empty:
+        # Verifica la existencia de columnas clave para evitar errores
+        if 'departamento' not in df.columns or 'municipio' not in df.columns or 'tipo_pedido' not in df.columns:
+            st.error("Error de datos: Faltan columnas clave ('departamento', 'municipio', 'tipo_pedido'). Por favor, asegúrate de que el CSV subido sea correcto y que el proceso de carga se haya completado sin errores.")
+            st.stop()
+
         total_registros = len(df)
         
         col1, col2, col3 = st.columns(3)
@@ -175,14 +254,15 @@ elif menu == "KPIs":
             col3.metric("📈 Máximo global", max_global)
 
         st.subheader("Filtros para análisis detallado")
-        col_select_departamento, col_select_municipio, col_select_tipo_pedido = st.columns(3)
         
-        # Se añaden las métricas de repartidor aquí para su visualización
+        # Filtro de Repartidor
         col_select_repartidor = st.selectbox(
             'Selecciona el Repartidor:',
-            options=['Todos'] + sorted(df['repartidor'].unique())
+            options=['Todos'] + (sorted(df['repartidor'].unique()) if 'repartidor' in df.columns else [])
         )
 
+        col_select_departamento, col_select_municipio, col_select_tipo_pedido = st.columns(3)
+        
         with col_select_departamento:
             selected_departamento = st.selectbox(
                 'Selecciona el Departamento:',
@@ -209,7 +289,7 @@ elif menu == "KPIs":
             (df['tipo_pedido'] == selected_tipo_pedido)
         ]
 
-        if col_select_repartidor != 'Todos':
+        if 'repartidor' in df.columns and col_select_repartidor != 'Todos':
             filtered_df = filtered_df[filtered_df['repartidor'] == col_select_repartidor]
 
         if not filtered_df.empty:
@@ -235,7 +315,6 @@ elif menu == "KPIs":
                                              color='tipo_pedido')
             st.plotly_chart(fig_distribucion, use_container_width=True)
 
-            # Nuevo KPI: Rendimiento por Repartidor (Si hay suficientes datos)
             if 'repartidor' in filtered_df.columns and len(filtered_df['repartidor'].unique()) > 1:
                  df_repartidor = filtered_df.groupby('repartidor')['tiempo_entrega'].mean().reset_index()
                  fig_repartidor = px.bar(df_repartidor, x='repartidor', y='tiempo_entrega',
@@ -275,7 +354,6 @@ elif menu == "Ingresar Pedido":
             selected_municipio = st.selectbox("Municipio", municipios)
             tipos_pedido = sorted(df['tipo_pedido'].unique())
             selected_tipo_pedido = st.selectbox("Tipo de Pedido", tipos_pedido)
-            # <-- Campo Repartidor
             selected_repartidor = st.selectbox("Repartidor Asignado", REPARTIDORES) 
         
         with col2:
@@ -306,6 +384,8 @@ elif menu == "Ingresar Pedido":
                 st.error("Por favor, completa los campos de Número de Gestión y Ubicación.")
             else:
                 try:
+                    tiempo_predicho_val = st.session_state.get('prediccion')
+                    
                     nueva_fila = pd.DataFrame([{
                         'orden_gestion': orden_gestion_display,
                         'fecha': datetime.now(),
@@ -321,7 +401,7 @@ elif menu == "Ingresar Pedido":
                         'estado': 'Pendiente',
                         'inicio_ruta': None,
                         'destino': None,
-                        'tiempo_predicho': st.session_state.get('prediccion'), 
+                        'tiempo_predicho': tiempo_predicho_val, 
                         'repartidor': selected_repartidor 
                     }])
                     
@@ -356,21 +436,19 @@ elif menu == "Predicción de Rutas":
             for col in ubicaciones_df.columns
         ]
         
-        # Mapeo de nombres de columnas comunes
         col_map = {'ubicacion': 'ubicacion', 'latitud': 'latitud', 'longitud': 'longitud'}
         
         if not all(col in ubicaciones_df.columns for col in col_map.values()):
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
-            # Limpieza y conversión de coordenadas
-            def clean_coord(coord):
-                # Intenta limpiar y convertir, maneja el caso de None/NaN
-                if pd.isna(coord): return None
-                return str(coord).replace('° N', '').replace('° O', '').strip()
-
-            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord).astype(float, errors='coerce')
-            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord).astype(float, errors='coerce')
+            # CORRECCIÓN DE LA CONVERSIÓN DE COORDENADAS:
+            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord)
+            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord)
             
+            ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
+            ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
+            # FIN DE LA CORRECCIÓN
+
             ubicaciones_df.dropna(subset=['latitud', 'longitud'], inplace=True)
 
             todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
@@ -381,12 +459,9 @@ elif menu == "Predicción de Rutas":
             # =======================================================
             st.subheader("Zonas de Alta Demanda (HeatMap)")
             
-            # 1. Cruzar datos de ubicaciones con datos de pedidos
-            # Contamos cuántas órdenes hay por cada ubicación
             if not df_entregas.empty:
                 df_pedidos_coords = df_entregas.groupby('ubicacion').size().reset_index(name='frecuencia')
                 
-                # Unir con las coordenadas para obtener lat, lon y frecuencia
                 heatmap_data = pd.merge(
                     df_pedidos_coords, 
                     ubicaciones_df[['ubicacion', 'latitud', 'longitud']], 
@@ -394,26 +469,23 @@ elif menu == "Predicción de Rutas":
                     how='inner'
                 )
                 
-                # Lista de datos para el HeatMap: [[lat, lon, peso], ...]
                 heatmap_list = heatmap_data[['latitud', 'longitud', 'frecuencia']].values.tolist()
             else:
-                heatmap_list = [] # Lista vacía si no hay entregas
+                heatmap_list = [] 
 
-            # 2. Crear el mapa
-            mapa_heatmap = folium.Map(location=[13.7942, -88.8965], zoom_start=8) # Centro de El Salvador
+            mapa_heatmap = folium.Map(location=[13.7942, -88.8965], zoom_start=8)
             
-            # 3. Añadir la capa de calor si hay datos
             if heatmap_list:
                 HeatMap(heatmap_list, 
                         radius=15, 
-                        max_val=heatmap_data['frecuencia'].max() + 1, # Normaliza el color
+                        max_val=heatmap_data['frecuencia'].max() + 1, 
                         min_opacity=0.2).add_to(mapa_heatmap)
                 st.info("El mapa de calor muestra las zonas con mayor frecuencia de pedidos.")
 
             st_folium(mapa_heatmap, width=700, height=500)
             
             # =======================================================
-            # 👇 Lógica de Predicción de Rutas (debajo del HeatMap)
+            # 👇 Lógica de Predicción de Rutas Específicas
             # =======================================================
             st.markdown("---")
             st.subheader("Predicción de Rutas Específicas")
@@ -442,7 +514,7 @@ elif menu == "Predicción de Rutas":
                         origen_coords = coordenadas.get(origen_prediccion, default_coords)
                         destino_coords = coordenadas.get(destino_prediccion, default_coords)
                         
-                        # Mapa de la ruta específica (para comparación)
+                        # Mapa de la ruta específica 
                         mapa_ruta = folium.Map(location=[(origen_coords[0] + destino_coords[0]) / 2, (origen_coords[1] + destino_coords[1]) / 2], zoom_start=10)
                         folium.Marker(origen_coords, popup=f"Origen: {origen_prediccion}", icon=folium.Icon(color="green")).add_to(mapa_ruta)
                         folium.Marker(destino_coords, popup=f"Destino: {destino_prediccion}", icon=folium.Icon(color="red")).add_to(mapa_ruta)
@@ -493,9 +565,13 @@ elif menu == "Seguimiento de Rutas":
     if not df_entregas.empty and ubicaciones_df is not None and not ubicaciones_df.empty:
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
+        if 'repartidor' not in ordenes_activas.columns:
+            st.error("Error: La base de datos no tiene la columna 'repartidor'. Por favor, **borra y sube tus datos nuevamente** en la sección 'Ver Datos' para actualizar la estructura.")
+            st.stop()
+        
         if not ordenes_activas.empty:
             
-            # <-- Filtro por Repartidor
+            # Filtro por Repartidor
             repartidores_activos = ordenes_activas['repartidor'].unique()
             selected_repartidor_seguimiento = st.selectbox(
                 "Filtrar por Repartidor:",
@@ -511,9 +587,18 @@ elif menu == "Seguimiento de Rutas":
 
             for index, row in ordenes_activas.iterrows():
                 try:
-                    inicio_ruta_dt = datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
-                except ValueError:
-                    inicio_ruta_dt = datetime.strptime(str(row['inicio_ruta']).split()[0], "%Y-%m-%d")
+                    # Manejo robusto del parseo de fecha
+                    if isinstance(row['inicio_ruta'], str):
+                        try:
+                            inicio_ruta_dt = datetime.strptime(row['inicio_ruta'], "%Y-%m-%d %H:%M:%S.%f")
+                        except ValueError:
+                            inicio_ruta_dt = datetime.strptime(row['inicio_ruta'].split('.')[0], "%Y-%m-%d %H:%M:%S")
+                    else:
+                        inicio_ruta_dt = row['inicio_ruta']
+                        
+                except Exception:
+                    inicio_ruta_dt = datetime.now() - timedelta(minutes=1) 
+
 
                 tiempo_transcurrido = datetime.now() - inicio_ruta_dt
                 tiempo_restante_segundos = row['tiempo_predicho'] * 60 - tiempo_transcurrido.total_seconds()
@@ -531,15 +616,19 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-                # Coordenadas para el mapa (aunque el mapa no se renderice aquí, se usa para enlaces)
-                # Se limpia y asegura la conversión de coordenadas aquí también
-                ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord).astype(float, errors='coerce')
-                ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord).astype(float, errors='coerce')
+                # Coordenadas para enlaces
+                # Limpiamos las coordenadas aquí también, ya que la sesión puede perder el estado limpio
+                ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
+                if ubicaciones_df_cleaned is not None:
+                     ubicaciones_df_cleaned['latitud'] = ubicaciones_df_cleaned['latitud'].apply(clean_coord)
+                     ubicaciones_df_cleaned['longitud'] = ubicaciones_df_cleaned['longitud'].apply(clean_coord)
+                     ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
+                     ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
-                coordenadas = {
-                    loc['ubicacion']: [loc['latitud'], loc['longitud']]
-                    for _, loc in ubicaciones_df.iterrows()
-                }
+                     coordenadas = {
+                        loc['ubicacion']: [loc['latitud'], loc['longitud']]
+                        for _, loc in ubicaciones_df_cleaned.iterrows()
+                     }
                 
                 origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
                 destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
