@@ -132,42 +132,7 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
-                    # **INICIO DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
-                    # 2. Verifica si la columna 'departamento' falta (indicando columnas fusionadas)
-                    if 'departamento' not in df_to_load.columns and df_to_load.shape[1] > 1:
-                        st.warning("Detectado CSV mal formado (columnas fusionadas). Intentando reestructurar...")
-                        
-                        corrupt_col_name = df_to_load.columns[0]
-                        
-                        # Campos esperados en la columna fusionada (Asumiendo 11 campos iniciales)
-                        new_split_names = [
-                            'ubicacion', 'municipio', 'departamento', 'fecha', 'hora', 
-                            'zona', 'tipo_pedido', 'clima', 'trafico', 'tiempo_entrega', 'retraso'
-                        ]
-                        
-                        # Divide la columna fusionada usando la coma (la coma estaba protegida por comillas)
-                        split_cols = df_to_load[corrupt_col_name].astype(str).str.split(',', expand=True)
-                        
-                        if split_cols.shape[1] >= len(new_split_names):
-                            # Toma solo los campos necesarios y asigna nombres
-                            split_cols = split_cols.iloc[:, :len(new_split_names)]
-                            split_cols.columns = new_split_names
-                            
-                            # Concatenar los campos corregidos con el resto de las columnas
-                            df_processed = pd.concat([split_cols, df_to_load.iloc[:, 1:].reset_index(drop=True)], axis=1)
-                            
-                            # Normalizar nombres de columna nuevamente después de la concatenación
-                            df_processed.columns = [
-                                re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
-                                for col in df_processed.columns
-                            ]
-                            
-                            df_to_load = df_processed
-                            st.success("CSV reestructurado con éxito.")
-                        else:
-                            st.error("Error: No se pudo reestructurar el CSV. El número de campos esperados no coincide. Por favor, revisa el formato de tu archivo.")
-                            return 
-                    # **FIN DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
+                 
                     
                     # Verificar y agregar columnas si no existen (Lógica estándar)
                     if 'orden_gestion' not in df_to_load.columns:
