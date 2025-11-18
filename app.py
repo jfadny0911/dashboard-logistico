@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
 from streamlit_folium import st_folium
+from folium.plugins import HeatMap # <-- Importación necesaria
 import random
 from io import StringIO
 import re
@@ -122,8 +123,8 @@ if menu == "Ver Datos":
                         df_to_load['estado'] = 'Pendiente'
                         st.info("Columna 'estado' agregada automáticamente.")
                         
-                    if 'repartidor' not in df_to_load.columns: # **<-- Nuevo campo Repartidor**
-                        df_to_load['repartidor'] = random.choice(REPARTIDORES)
+                    if 'repartidor' not in df_to_load.columns:
+                        df_to_load['repartidor'] = [random.choice(REPARTIDORES) for _ in range(len(df_to_load))]
                         st.info("Columna 'repartidor' agregada automáticamente (simulada).")
                         
                     if 'inicio_ruta' not in df_to_load.columns:
@@ -138,8 +139,6 @@ if menu == "Ver Datos":
                         df_to_load['tiempo_predicho'] = None
                     
                     with engine.connect() as conn:
-                        # Para evitar problemas con el TRUNCATE si la tabla no se ha creado con todas las columnas.
-                        # Mejor usar if_exists='replace' para asegurar la estructura.
                         df_to_load.to_sql('entregas', conn, if_exists='replace', index=False)
                         conn.commit()
                     st.success("✅ Base de datos cargada con éxito. Por favor, reinicia la aplicación para ver los datos.")
@@ -276,7 +275,7 @@ elif menu == "Ingresar Pedido":
             selected_municipio = st.selectbox("Municipio", municipios)
             tipos_pedido = sorted(df['tipo_pedido'].unique())
             selected_tipo_pedido = st.selectbox("Tipo de Pedido", tipos_pedido)
-            # **<-- Nuevo campo Repartidor**
+            # <-- Campo Repartidor
             selected_repartidor = st.selectbox("Repartidor Asignado", REPARTIDORES) 
         
         with col2:
@@ -310,7 +309,7 @@ elif menu == "Ingresar Pedido":
                     nueva_fila = pd.DataFrame([{
                         'orden_gestion': orden_gestion_display,
                         'fecha': datetime.now(),
-                        'zona': selected_departamento, # Se mantiene por compatibilidad si existe en BD
+                        'zona': selected_departamento, 
                         'tipo_pedido': selected_tipo_pedido,
                         'clima': selected_clima,
                         'trafico': selected_trafico,
@@ -322,8 +321,8 @@ elif menu == "Ingresar Pedido":
                         'estado': 'Pendiente',
                         'inicio_ruta': None,
                         'destino': None,
-                        'tiempo_predicho': st.session_state.get('prediccion'), # Usar la predicción calculada
-                        'repartidor': selected_repartidor # **<-- Nuevo campo Repartidor**
+                        'tiempo_predicho': st.session_state.get('prediccion'), 
+                        'repartidor': selected_repartidor 
                     }])
                     
                     with engine.connect() as conn:
@@ -343,7 +342,6 @@ elif menu == "Predicción de Rutas":
     
     if uploaded_file is not None:
         try:
-            # Se usa el delimitador None para que pandas intente detectarlo (más robusto)
             ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file)
             st.session_state['ubicaciones_df'] = ubicaciones_df
         except Exception as e:
@@ -366,17 +364,59 @@ elif menu == "Predicción de Rutas":
         else:
             # Limpieza y conversión de coordenadas
             def clean_coord(coord):
+                # Intenta limpiar y convertir, maneja el caso de None/NaN
+                if pd.isna(coord): return None
                 return str(coord).replace('° N', '').replace('° O', '').strip()
 
-            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord).astype(float, errors='ignore')
-            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord).astype(float, errors='ignore')
+            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord).astype(float, errors='coerce')
+            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord).astype(float, errors='coerce')
             
-            # Limpiar filas con NaN después de la conversión
             ubicaciones_df.dropna(subset=['latitud', 'longitud'], inplace=True)
 
             todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
-            
             df_entregas = load_data_from_db()
+
+            # =======================================================
+            # 🗺️ Generar Mapa de Calor (HeatMap) de Zonas de Tráfico
+            # =======================================================
+            st.subheader("Zonas de Alta Demanda (HeatMap)")
+            
+            # 1. Cruzar datos de ubicaciones con datos de pedidos
+            # Contamos cuántas órdenes hay por cada ubicación
+            if not df_entregas.empty:
+                df_pedidos_coords = df_entregas.groupby('ubicacion').size().reset_index(name='frecuencia')
+                
+                # Unir con las coordenadas para obtener lat, lon y frecuencia
+                heatmap_data = pd.merge(
+                    df_pedidos_coords, 
+                    ubicaciones_df[['ubicacion', 'latitud', 'longitud']], 
+                    on='ubicacion', 
+                    how='inner'
+                )
+                
+                # Lista de datos para el HeatMap: [[lat, lon, peso], ...]
+                heatmap_list = heatmap_data[['latitud', 'longitud', 'frecuencia']].values.tolist()
+            else:
+                heatmap_list = [] # Lista vacía si no hay entregas
+
+            # 2. Crear el mapa
+            mapa_heatmap = folium.Map(location=[13.7942, -88.8965], zoom_start=8) # Centro de El Salvador
+            
+            # 3. Añadir la capa de calor si hay datos
+            if heatmap_list:
+                HeatMap(heatmap_list, 
+                        radius=15, 
+                        max_val=heatmap_data['frecuencia'].max() + 1, # Normaliza el color
+                        min_opacity=0.2).add_to(mapa_heatmap)
+                st.info("El mapa de calor muestra las zonas con mayor frecuencia de pedidos.")
+
+            st_folium(mapa_heatmap, width=700, height=500)
+            
+            # =======================================================
+            # 👇 Lógica de Predicción de Rutas (debajo del HeatMap)
+            # =======================================================
+            st.markdown("---")
+            st.subheader("Predicción de Rutas Específicas")
 
             if not df_entregas.empty:
                 ordenes_pendientes = df_entregas[df_entregas['estado'] == 'Pendiente']['orden_gestion'].unique()
@@ -402,11 +442,12 @@ elif menu == "Predicción de Rutas":
                         origen_coords = coordenadas.get(origen_prediccion, default_coords)
                         destino_coords = coordenadas.get(destino_prediccion, default_coords)
                         
-                        mapa = folium.Map(location=[13.7, -89.2], zoom_start=8)
-                        folium.Marker(origen_coords, popup=f"Origen: {origen_prediccion}", icon=folium.Icon(color="green")).add_to(mapa)
-                        folium.Marker(destino_coords, popup=f"Destino: {destino_prediccion}", icon=folium.Icon(color="red")).add_to(mapa)
-                        folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa)
-                        st_folium(mapa, width=700, height=500)
+                        # Mapa de la ruta específica (para comparación)
+                        mapa_ruta = folium.Map(location=[(origen_coords[0] + destino_coords[0]) / 2, (origen_coords[1] + destino_coords[1]) / 2], zoom_start=10)
+                        folium.Marker(origen_coords, popup=f"Origen: {origen_prediccion}", icon=folium.Icon(color="green")).add_to(mapa_ruta)
+                        folium.Marker(destino_coords, popup=f"Destino: {destino_prediccion}", icon=folium.Icon(color="red")).add_to(mapa_ruta)
+                        folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa_ruta)
+                        st_folium(mapa_ruta, width=700, height=500)
                         
                         # Cálculo de tiempo estimado (simulación)
                         base_time = 30
@@ -426,8 +467,7 @@ elif menu == "Predicción de Rutas":
                                         SET estado = 'Activa', 
                                             inicio_ruta = '{datetime.now()}', 
                                             destino = '{destino_prediccion}', 
-                                            tiempo_predicho = {tiempo_estimado},
-                                            repartidor = '{orden_data.get('repartidor', 'N/A')}'
+                                            tiempo_predicho = {tiempo_estimado}
                                         WHERE orden_gestion = '{selected_orden}'
                                     """))
                                     conn.commit()
@@ -437,7 +477,7 @@ elif menu == "Predicción de Rutas":
                             except Exception as e:
                                 st.error(f"❌ Error al iniciar la ruta: {e}")
                     else:
-                        st.warning("El origen y destino no pueden ser iguales o la ubicación de origen no está en la lista de ubicaciones.")
+                        st.warning("El origen y destino no pueden ser iguales.")
             else:
                 st.info("No hay datos en la base de datos para mostrar las predicciones de ruta.")
     else:
@@ -455,7 +495,7 @@ elif menu == "Seguimiento de Rutas":
         
         if not ordenes_activas.empty:
             
-            # **<-- Nuevo filtro por Repartidor**
+            # <-- Filtro por Repartidor
             repartidores_activos = ordenes_activas['repartidor'].unique()
             selected_repartidor_seguimiento = st.selectbox(
                 "Filtrar por Repartidor:",
@@ -473,13 +513,12 @@ elif menu == "Seguimiento de Rutas":
                 try:
                     inicio_ruta_dt = datetime.strptime(str(row['inicio_ruta']), "%Y-%m-%d %H:%M:%S.%f")
                 except ValueError:
-                    # En caso de que el formato sea solo fecha
                     inicio_ruta_dt = datetime.strptime(str(row['inicio_ruta']).split()[0], "%Y-%m-%d")
 
                 tiempo_transcurrido = datetime.now() - inicio_ruta_dt
                 tiempo_restante_segundos = row['tiempo_predicho'] * 60 - tiempo_transcurrido.total_seconds()
                 
-                # **<-- Lógica para simular movimiento en el tiempo de entrega**
+                # Lógica para simular movimiento en el tiempo de entrega
                 if tiempo_restante_segundos < 0:
                     tiempo_restante_str = "00:00:00"
                     progreso = 1.0
@@ -490,10 +529,13 @@ elif menu == "Seguimiento de Rutas":
                     segundos = total_segundos % 60
                     tiempo_restante_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
                     
-                    # Progreso de 0.0 a 1.0
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
                 # Coordenadas para el mapa (aunque el mapa no se renderice aquí, se usa para enlaces)
+                # Se limpia y asegura la conversión de coordenadas aquí también
+                ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord).astype(float, errors='coerce')
+                ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord).astype(float, errors='coerce')
+
                 coordenadas = {
                     loc['ubicacion']: [loc['latitud'], loc['longitud']]
                     for _, loc in ubicaciones_df.iterrows()
@@ -502,7 +544,7 @@ elif menu == "Seguimiento de Rutas":
                 origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
                 destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
 
-                st.markdown(f"**Gestión {row['orden_gestion']} - Repartidor: {row['repartidor']}**") # **<-- Muestra Repartidor**
+                st.markdown(f"**Gestión {row['orden_gestion']} - Repartidor: {row['repartidor']}**")
                 st.info(f"Ruta: **{row['ubicacion']}** -> **{row['destino']}**")
                 st.markdown(f"**Tipo de Pedido:** {row['tipo_pedido']} | **Clima:** {row['clima']} | **Tráfico:** {row['trafico']}")
                 
@@ -511,10 +553,6 @@ elif menu == "Seguimiento de Rutas":
                     st.progress(progreso, text=f"Progreso de la ruta ({int(progreso * 100)}%)")
                 with col_tiempo:
                     st.metric("Tiempo Restante", tiempo_restante_str)
-
-                # **<-- Simulación de movimiento**
-                # El "movimiento" se refleja en la barra de progreso y el tiempo restante
-                # No se simula la posición geográfica intermedia sin un servicio de ruteo real.
                 
                 col_mapas, col_acciones = st.columns([2, 1])
                 with col_mapas:
