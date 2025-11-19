@@ -593,9 +593,7 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-              
-                origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
-                destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
+            
 
                 st.markdown(f"**Gestión {row['orden_gestion']} - Repartidor: {row['repartidor']}**")
                 st.info(f"Ruta: **{row['ubicacion']}** -> **{row['destino']}**")
