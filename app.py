@@ -21,7 +21,7 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
 )
-engine = create_engine(DATABASE=URL)
+engine = create_engine(DATABASE_URL)
 
 # Lista de repartidores disponibles (para simulación)
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
