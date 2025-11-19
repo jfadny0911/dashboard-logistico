@@ -185,7 +185,7 @@ if menu == "Ver Datos":
                             st.success("CSV reestructurado con éxito.")
                         else:
                             st.error("Error: La columna fusionada no contiene suficientes campos. Por favor, revisa el formato.")
-                            return
+                           
 
                     # 3. Verificar la existencia de la columna departamento después de la normalización/corrección
                     if 'departamento' not in df_to_load.columns:
