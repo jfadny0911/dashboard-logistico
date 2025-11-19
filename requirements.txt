@@ -5,4 +5,5 @@ plotly
 folium
 streamlit-folium
 sqlalchemy
-google-genai  
+google-genai
+streamlit-option-menu 
