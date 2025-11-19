@@ -10,37 +10,44 @@ from streamlit_option_menu import option_menu
 import random
 from io import StringIO
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import numpy as np
 import math
 
+# Paths to uploaded sample files (if user uploaded them in this environment)
+SAMPLE_CLIENTES = "/mnt/data/datos_entregas_15000_COLAB (1).csv"
+SAMPLE_UBIC = "/mnt/data/ubicaciones_unicas_colab (1).csv"
+
 # ===============================
-# 🔗 Conexión a la base de datos PostgreSQL
+# 🔗 Conexión a la base de datos PostgreSQL de Render (o local DB por defecto)
 # ===================================================
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
+    "sqlite:///chivofast_local.db"
 )
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith('sqlite') else {})
 
-# Lista de repartidores (editable/subible)
+# Lista de repartidores disponibles (para simulación)
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
 # Configuración de página
 st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
-st.title("📦 ChivoFast — Dashboard Logístico Mejorado")
+st.title("📦 ChivoFast — Dashboard Logístico (Normalizado)")
 
-# ===============================
-# 📋 Funciones utilitarias
-# ===================================================
+# -----------------------------
+# Utilidades de lectura y normalización
+# -----------------------------
 
-def read_uploaded_csv_with_encoding(uploaded_file, delimiter=None):
+def read_uploaded_csv_with_encoding(uploaded_file, delimiter=','):
     encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
     for enc in encodings:
         try:
-            file_content = uploaded_file.getvalue().decode(enc)
-            df = pd.read_csv(StringIO(file_content), sep=delimiter, engine='python')
+            if hasattr(uploaded_file, 'getvalue'):
+                content = uploaded_file.getvalue().decode(enc)
+                df = pd.read_csv(StringIO(content), sep=delimiter, engine='python')
+            else:
+                df = pd.read_csv(uploaded_file, encoding=enc)
             return df
         except Exception:
             continue
@@ -49,36 +56,60 @@ def read_uploaded_csv_with_encoding(uploaded_file, delimiter=None):
 
 
 def normalize_columns(df):
-    df.columns = [
-        re.sub(r'[^a-z0-9_]', '', col.lower()
-               .replace('á','a').replace('é','e').replace('í','i')
-               .replace('ó','o').replace('ú','u').replace('ñ','n')
-               .replace(' ','_').strip())
-        for col in df.columns
-    ]
+    df = df.copy()
+    col_map = {}
+    for col in df.columns:
+        c = col.strip().lower()
+        c = c.replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n')
+        c = re.sub(r'[^a-z0-9_]', '_', c)
+        c = re.sub(r'_+', '_', c).strip('_')
+        col_map[col] = c
+    df.rename(columns=col_map, inplace=True)
+
+    # map common names to standards
+    rename_map = {
+        'ubicacion': 'nombre', 'ubicacion_': 'nombre', 'ubicaciones': 'nombre', 'ubicacion_nombre': 'nombre',
+        'nombre_cliente': 'nombre', 'cliente': 'nombre', 'cliente_nombre': 'nombre',
+        'latitud': 'lat', 'lat': 'lat', 'latitude': 'lat', 'y': 'lat',
+        'longitud': 'lon', 'long': 'lon', 'lng': 'lon', 'longitude': 'lon', 'x': 'lon'
+    }
+    for k,v in rename_map.items():
+        if k in df.columns and v not in df.columns:
+            df.rename(columns={k:v}, inplace=True)
+
     return df
 
 
-def check_table_exists(name):
-    with engine.connect() as conn:
-        try:
-            result = conn.execute(text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{name}')"))
-            return result.scalar()
-        except Exception:
-            return False
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
 
-
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def load_table(name):
-    if check_table_exists(name):
-        with engine.connect() as conn:
-            try:
+    if check_table_exists_local(name):
+        try:
+            with engine.connect() as conn:
                 df = pd.read_sql_table(name, conn)
-                df.columns = [re.sub(r'[^a-z0-9_]', '', col.lower().replace(' ','_')) for col in df.columns]
+                df = normalize_columns(df)
                 return df
-            except Exception:
-                return pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
     return pd.DataFrame()
+
+
+def check_table_exists_local(name):
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}';")) if DATABASE_URL.startswith('sqlite') else conn.execute(text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{name}')"))
+            # for sqlite, res.fetchall() returns rows if exists
+            if DATABASE_URL.startswith('sqlite'):
+                return len(res.fetchall())>0
+            return res.scalar()
+    except Exception:
+        return False
 
 
 def clear_table(name):
@@ -89,351 +120,360 @@ def clear_table(name):
 
 def get_next_gestion_number(df):
     if 'orden_gestion' in df.columns and not df.empty:
-        max_gestion = pd.to_numeric(df['orden_gestion'], errors='coerce').max()
-        if pd.isna(max_gestion):
-            return 1
-        return int(max_gestion) + 1
+        try:
+            max_gestion = pd.to_numeric(df['orden_gestion'], errors='coerce').max()
+            if pd.isna(max_gestion):
+                return 1
+            return int(max_gestion) + 1
+        except Exception:
+            return len(df)+1
     return 1
 
-
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
-
-# ===============================
-# 📋 Menú lateral (opciones)
-# ===================================================
+# -----------------------------
+# Sidebar menu
+# -----------------------------
 with st.sidebar:
     selected = option_menu(
         "Menú",
-        ["Ver Datos", "KPIs", "Ingresar Pedido", "Predicción de Rutas", "Seguimiento de Rutas", "Clientes", "Borrar Datos"],
-        icons=["table","bar-chart","plus-square","map","geo-alt","people-fill","trash"],
+        ["Ver Datos", "Clientes", "Mapa", "Pedidos", "Asignación", "KPIs", "Seguimiento", "Borrar Datos"],
+        icons=["table","people-fill","map","box-seam","truck","bar-chart","geo-alt","trash"],
         menu_icon="cast",
         default_index=0,
     )
 
-# ===============================
-# --- Ver Datos: subir y gestionar tablas ---
-# ===================================================
+# -----------------------------
+# VER DATOS: Subir archivos y cargar a BD (soporta archivos grandes)
+# -----------------------------
 if selected == "Ver Datos":
-    st.header("📋 Gestionar datos")
-    st.markdown("Sube aquí tus archivos de clientes y ubicaciones (soporta 15,000+ registros).")
+    st.header("📋 Gestionar datos — Subir archivos (clientes, ubicaciones, pedidos)")
+    st.markdown("Sube tus archivos CSV. El sistema normaliza encabezados automáticamente.")
 
     col1, col2 = st.columns(2)
     with col1:
-        clientes_file = st.file_uploader("Sube archivo de CLIENTES (CSV)", type=['csv'], key='clientes_file')
+        st.subheader("Clientes (CSV)")
+        clientes_file = st.file_uploader("Sube archivo de CLIENTES", type=['csv'], key='upl_clientes')
+        if clientes_file is None and os.path.exists(SAMPLE_CLIENTES):
+            if st.button('Cargar archivo de ejemplo de clientes'):
+                clientes_file = SAMPLE_CLIENTES
         if clientes_file:
-            df_clientes = read_uploaded_csv_with_encoding(clientes_file, delimiter=',')
+            df_clientes = read_uploaded_csv_with_encoding(clientes_file)
             if df_clientes is not None:
                 df_clientes = normalize_columns(df_clientes)
-                # aseguramos columnas clave
+                # force basic columns
                 if 'lat' not in df_clientes.columns or 'lon' not in df_clientes.columns or 'nombre' not in df_clientes.columns:
-                    st.error("El archivo de clientes debe incluir al menos: nombre, lat, lon. Normaliza los encabezados.")
-                else:
-                    st.info(f"Clientes cargados: {len(df_clientes)} filas")
-                    st.session_state['df_clientes'] = df_clientes
-                    if st.button("Guardar clientes en BD"):
-                        with engine.connect() as conn:
-                            df_clientes.to_sql('clientes', conn, if_exists='replace', index=False)
-                            conn.commit()
-                        st.success("Clientes guardados en la base de datos (tabla 'clientes').")
-                        st.cache_data.clear()
+                    st.warning("Se han normalizado nombres de columnas. Asegúrate de que existan lat/lon/nombre. Revise la vista previa.")
+                st.dataframe(df_clientes.head(200))
+                if st.button('Guardar clientes en BD'):
+                    with engine.connect() as conn:
+                        df_clientes.to_sql('clientes', conn, if_exists='replace', index=False)
+                        conn.commit()
+                    st.success('Clientes guardados en la base de datos (tabla: clientes)')
+                    st.cache_data.clear()
     with col2:
-        ubic_file = st.file_uploader("Sube archivo de UBICACIONES (CSV) - para mapa", type=['csv'], key='ubic_file')
+        st.subheader("Ubicaciones (CSV)")
+        ubic_file = st.file_uploader("Sube archivo de UBICACIONES", type=['csv'], key='upl_ubic')
+        if ubic_file is None and os.path.exists(SAMPLE_UBIC):
+            if st.button('Cargar archivo de ejemplo de ubicaciones'):
+                ubic_file = SAMPLE_UBIC
         if ubic_file:
-            df_ubic = read_uploaded_csv_with_encoding(ubic_file, delimiter=',')
+            df_ubic = read_uploaded_csv_with_encoding(ubic_file)
             if df_ubic is not None:
                 df_ubic = normalize_columns(df_ubic)
-                if 'ubicacion' not in df_ubic.columns and 'nombre' not in df_ubic.columns:
-                    st.warning("Se aconseja que la columna de ubicaciones se llame 'ubicacion' o 'nombre'.")
-                if 'lat' not in df_ubic.columns or 'lon' not in df_ubic.columns:
-                    st.error("El archivo de ubicaciones debe contener columnas 'lat' y 'lon'.")
-                else:
-                    st.info(f"Ubicaciones cargadas: {len(df_ubic)} filas")
-                    st.session_state['df_ubic'] = df_ubic
-                    if st.button("Guardar ubicaciones en BD"):
-                        with engine.connect() as conn:
-                            df_ubic.to_sql('ubicaciones', conn, if_exists='replace', index=False)
-                            conn.commit()
-                        st.success("Ubicaciones guardadas en la base de datos (tabla 'ubicaciones').")
-                        st.cache_data.clear()
+                st.dataframe(df_ubic.head(200))
+                if st.button('Guardar ubicaciones en BD'):
+                    with engine.connect() as conn:
+                        df_ubic.to_sql('ubicaciones', conn, if_exists='replace', index=False)
+                        conn.commit()
+                    st.success('Ubicaciones guardadas en la base de datos (tabla: ubicaciones)')
+                    st.cache_data.clear()
 
-    st.markdown("---")
-    st.subheader("📥 Cargar archivo de pedidos (opcional)")
-    pedidos_file = st.file_uploader("Archivo de pedidos (CSV) para importar pedidos existentes", type=['csv'], key='pedidos_file')
+    st.markdown('---')
+    st.subheader('Pedidos (opcional)')
+    pedidos_file = st.file_uploader('Sube archivo de pedidos (CSV)', type=['csv'], key='upl_ped')
     if pedidos_file:
-        df_pedidos = read_uploaded_csv_with_encoding(pedidos_file, delimiter=',')
-        if df_pedidos is not None:
-            df_pedidos = normalize_columns(df_pedidos)
-            st.session_state['df_pedidos'] = df_pedidos
-            st.success(f"Pedidos listos: {len(df_pedidos)} filas. Pulsa Guardar para insertarlos en 'entregas'.")
-            if st.button("Guardar pedidos en entregas (BD)"):
+        df_ped = read_uploaded_csv_with_encoding(pedidos_file)
+        if df_ped is not None:
+            df_ped = normalize_columns(df_ped)
+            st.dataframe(df_ped.head(200))
+            if st.button('Guardar pedidos en entregas (append)'):
                 with engine.connect() as conn:
-                    df_pedidos.to_sql('entregas', conn, if_exists='append', index=False)
+                    df_ped.to_sql('entregas', conn, if_exists='append', index=False)
                     conn.commit()
-                st.success("Pedidos importados a la tabla 'entregas'.")
+                st.success('Pedidos añadidos a tabla entregas')
                 st.cache_data.clear()
 
-# ===============================
-# --- KPIs (visualización avanzada) ---
-# ===================================================
-elif selected == "KPIs":
-    st.header("📊 KPIs y análisis")
-    df_ent = load_table('entregas')
+# -----------------------------
+# CLIENTES: visualizar y filtrar
+# -----------------------------
+elif selected == "Clientes":
+    st.header('👥 Clientes — Vista y filtros')
     df_clients = load_table('clientes')
-
-    if df_clients.empty and df_ent.empty:
-        st.info("No hay datos en la base de datos. Sube archivos en 'Ver Datos'.")
-    else:
-        # preferir df_clients para ubicación de clientes
-        df = df_clients if not df_clients.empty else df_ent
-        df = normalize_columns(df)
-
-        st.subheader("KPIs Generales")
-        total_clientes = len(df)
-        rutas = df['ruta'].nunique() if 'ruta' in df.columns else 0
-        atendidos = df[df.get('estado','').str.lower() == 'entregado'].shape[0] if 'estado' in df.columns else 0
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total clientes", total_clientes)
-        col2.metric("Rutas activas", rutas)
-        col3.metric("Clientes entregados", atendidos)
-        col4.metric("% Entregados", f"{round((atendidos/total_clientes)*100,2) if total_clientes>0 else 0}%")
-
-        st.markdown("---")
-        if 'tiempo_entrega' in df.columns:
-            st.subheader("Distribución Tiempo de Entrega")
-            fig = px.histogram(df, x='tiempo_entrega', nbins=30, title='Tiempo de Entrega (min)')
-            st.plotly_chart(fig, use_container_width=True)
-
-        if 'departamento' in df.columns:
-            st.subheader("Reparto por Departamento")
-            dept = df.groupby('departamento').size().reset_index(name='count')
-            fig2 = px.bar(dept, x='departamento', y='count')
-            st.plotly_chart(fig2, use_container_width=True)
-
-# ===============================
-# --- Ingresar Pedido (nueva orden o desde cliente) ---
-# ===================================================
-elif selected == "Ingresar Pedido":
-    st.header("📝 Ingresar / Asignar Pedido")
-    df_clients = load_table('clientes')
-    df_ent = load_table('entregas')
-
     if df_clients.empty:
-        st.warning("No hay clientes en BD. Sube el archivo de clientes en 'Ver Datos' o añade manualmente.")
+        st.info('No hay clientes cargados. Ve a "Ver Datos" para subir un CSV o carga el ejemplo.')
+    else:
+        dfc = df_clients.copy()
+        dfc = normalize_columns(dfc)
+        dfc['lat'] = pd.to_numeric(dfc.get('lat', pd.Series([])), errors='coerce')
+        dfc['lon'] = pd.to_numeric(dfc.get('lon', pd.Series([])), errors='coerce')
 
-    with st.form("nuevo_pedido_form"):
-        st.subheader("Crear nueva orden")
+        st.subheader('Tabla de clientes')
+        st.dataframe(dfc, use_container_width=True)
+
+        st.subheader('Filtros')
+        cols = st.multiselect('Columnas a mostrar', options=list(dfc.columns), default=['nombre','ruta','lat','lon'] if set(['nombre','ruta','lat','lon']).issubset(dfc.columns) else list(dfc.columns)[:6])
+        ruta_f = st.multiselect('Filtrar por ruta', options=sorted(dfc['ruta'].unique()) if 'ruta' in dfc.columns else [])
+        estado_f = st.multiselect('Filtrar por estado', options=sorted(dfc['estado'].unique()) if 'estado' in dfc.columns else [])
+
+        filtered = dfc.copy()
+        if ruta_f: filtered = filtered[filtered['ruta'].isin(ruta_f)]
+        if estado_f and 'estado' in filtered.columns: filtered = filtered[filtered['estado'].isin(estado_f)]
+
+        st.dataframe(filtered[cols], use_container_width=True)
+
+# -----------------------------
+# MAPA: heatmap y puntos con cluster
+# -----------------------------
+elif selected == "Mapa":
+    st.header('🗺️ Mapa — HeatMap y puntos')
+    df_ubic = load_table('ubicaciones')
+    df_clients = load_table('clientes')
+
+    if df_ubic.empty and df_clients.empty:
+        st.info('No hay datos de ubicaciones o clientes. Sube archivos en "Ver Datos".')
+    else:
         if not df_clients.empty:
-            cliente_sel = st.selectbox('Seleccionar cliente (opcional):', options=['Nuevo'] + df_clients['nombre'].tolist())
+            dfc = normalize_columns(df_clients.copy())
+            dfc['lat'] = pd.to_numeric(dfc.get('lat'), errors='coerce')
+            dfc['lon'] = pd.to_numeric(dfc.get('lon'), errors='coerce')
+            dfc.dropna(subset=['lat','lon'], inplace=True)
+            center = [dfc['lat'].mean(), dfc['lon'].mean()]
         else:
-            cliente_sel = 'Nuevo'
+            du = normalize_columns(df_ubic.copy())
+            du['lat'] = pd.to_numeric(du.get('lat'), errors='coerce')
+            du['lon'] = pd.to_numeric(du.get('lon'), errors='coerce')
+            du.dropna(subset=['lat','lon'], inplace=True)
+            dfc = du
+            center = [du['lat'].mean(), du['lon'].mean()]
 
-        orden_gestion = st.text_input('Orden gestión (dejar vacío para autogenerar)')
-        nombre_cliente = st.text_input('Nombre del cliente', value='' if cliente_sel=='Nuevo' else cliente_sel)
-        departamento = st.text_input('Departamento')
-        municipio = st.text_input('Municipio')
-        ubicacion = st.text_input('Ubicación / Dirección')
-        lat = st.text_input('Lat', value='')
-        lon = st.text_input('Lon', value='')
-        tipo_pedido = st.selectbox('Tipo de pedido', options=['Paquete','Documento','Comida','Otro'])
-        clima = st.selectbox('Clima', options=['Normal','Lluvioso'])
-        trafico = st.selectbox('Tráfico', options=['Bajo','Medio','Alto'])
-        repartidor = st.selectbox('Asignar repartidor', options=REPARTIDORES)
-        submit_order = st.form_submit_button('Guardar orden')
+        m = folium.Map(location=center, zoom_start=8)
+        # add heatmap from clientes if entregas exist
+        df_ent = load_table('entregas')
+        if not df_ent.empty:
+            counts = df_ent.groupby('ubicacion').size().reset_index(name='freq')
+            merged = pd.merge(counts, dfc, left_on='ubicacion', right_on='nombre', how='inner') if 'nombre' in dfc.columns else counts
+            heat_list = merged[['lat','lon','freq']].values.tolist() if {'lat','lon','freq'}.issubset(merged.columns) else []
+        else:
+            heat_list = []
+        if heat_list:
+            HeatMap(heat_list, radius=12, min_opacity=0.3).add_to(m)
 
-    if submit_order:
+        # add markers
+        for _, r in dfc.iterrows():
+            folium.CircleMarker(location=[r['lat'], r['lon']], radius=3, tooltip=str(r.get('nombre',''))).add_to(m)
+
+        st_folium(m, width=1000, height=600)
+
+# -----------------------------
+# PEDIDOS: ver y crear
+# -----------------------------
+elif selected == "Pedidos":
+    st.header('📦 Pedidos — Crear y administrar')
+    df_ent = load_table('entregas')
+    df_clients = load_table('clientes')
+
+    st.subheader('📄 Pedidos existentes')
+    if df_ent.empty:
+        st.info('No hay pedidos en la tabla entregas. Puedes cargarlos en "Ver Datos" o crear nuevos aquí.')
+    else:
+        st.dataframe(df_ent, use_container_width=True)
+
+    st.markdown('---')
+    st.subheader('➕ Crear nuevo pedido')
+    with st.form('form_new_order'):
+        nombre = st.text_input('Nombre cliente')
+        orden = st.text_input('Orden gestión (opcional)')
+        lat = st.text_input('Lat (opcional)')
+        lon = st.text_input('Lon (opcional)')
+        tipo = st.selectbox('Tipo de pedido', ['Paquete','Comida','Documento','Otro'])
+        prioridad = st.selectbox('Prioridad', ['Normal','Alta','Baja'])
+        repartidor = st.selectbox('Asignar repartidor (opcional)', options=REPARTIDORES)
+        submit = st.form_submit_button('Crear pedido')
+    if submit:
         try:
             df_ent = load_table('entregas')
-            next_g = get_next_gestion_number(df_ent)
-            orden = orden_gestion if orden_gestion else f"{next_g:04d}"
+            next_num = get_next_gestion_number(df_ent)
+            orden_final = orden if orden else f"{next_num:04d}"
             nueva = pd.DataFrame([{
-                'orden_gestion': orden,
+                'orden_gestion': orden_final,
                 'fecha': datetime.now(),
-                'zona': departamento,
-                'tipo_pedido': tipo_pedido,
-                'clima': clima,
-                'trafico': trafico,
-                'tiempo_entrega': None,
-                'retraso': None,
-                'ubicacion': ubicacion,
-                'municipio': municipio,
-                'departamento': departamento,
-                'estado': 'Pendiente',
-                'inicio_ruta': None,
-                'destino': None,
-                'tiempo_predicho': None,
-                'repartidor': repartidor,
+                'nombre': nombre,
                 'lat': float(lat) if lat else None,
                 'lon': float(lon) if lon else None,
-                'nombre': nombre_cliente
+                'tipo_pedido': tipo,
+                'prioridad': prioridad,
+                'estado': 'Pendiente',
+                'repartidor': repartidor
             }])
             with engine.connect() as conn:
                 nueva.to_sql('entregas', conn, if_exists='append', index=False)
                 conn.commit()
-            st.success(f"Orden {orden} guardada en la base de datos.")
+            st.success(f'Pedido {orden_final} creado y guardado en entregas')
             st.cache_data.clear()
         except Exception as e:
-            st.error(f"Error al guardar la orden: {e}")
+            st.error(f'Error al crear pedido: {e}')
 
-# ===============================
-# --- Predicción de Rutas (mapas / heatmap / seleccionar origen) ---
-# ===================================================
-elif selected == "Predicción de Rutas":
-    st.header("🚚 Predicción y Mapa de Rutas")
-
-    ubicaciones = load_table('ubicaciones')
+# -----------------------------
+# ASIGNACIÓN: asignar repartidores a pedidos
+# -----------------------------
+elif selected == "Asignación":
+    st.header('🚚 Asignación de repartidores')
     df_ent = load_table('entregas')
-
-    if ubicaciones.empty:
-        st.info("Sube el archivo de ubicaciones en 'Ver Datos' para ver mapas y predicciones.")
+    if df_ent.empty:
+        st.info('No hay pedidos para asignar. Crea pedidos en la pestaña "Pedidos" o importa en "Ver Datos"')
     else:
-        ubic = normalize_columns(ubicaciones.copy())
-        ubic['lat'] = pd.to_numeric(ubic['lat'], errors='coerce')
-        ubic['lon'] = pd.to_numeric(ubic['lon'], errors='coerce')
-        ubic.dropna(subset=['lat','lon'], inplace=True)
+        pendientes = df_ent[df_ent.get('estado','').str.lower().isin(['pendiente','pendiente ' , 'pendiente'])]
+        st.subheader('Pedidos pendientes')
+        st.dataframe(pendientes[['orden_gestion','nombre','municipio','departamento']].head(200), use_container_width=True)
 
-        st.subheader('Zonas de Alta Demanda (HeatMap)')
-        if not df_ent.empty:
-            df_count = df_ent.groupby('ubicacion').size().reset_index(name='freq')
-            heat = pd.merge(df_count, ubic[['ubicacion','lat','lon']], on='ubicacion', how='inner')
-            heat_list = heat[['lat','lon','freq']].values.tolist()
+        sel_ord = st.selectbox('Seleccionar orden', options=pendientes['orden_gestion'].tolist() if not pendientes.empty else [])
+        sel_rep = st.selectbox('Seleccionar repartidor', options=REPARTIDORES)
+        if st.button('Asignar repartidor') and sel_ord:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"UPDATE entregas SET repartidor = '{sel_rep}' WHERE orden_gestion = '{sel_ord}'"))
+                    conn.commit()
+                st.success(f'Orden {sel_ord} asignada a {sel_rep}')
+                st.cache_data.clear()
+            except Exception as e:
+                st.error(f'Error asignando repartidor: {e}')
+
+# -----------------------------
+# KPIs: todas las métricas solicitadas
+# -----------------------------
+elif selected == "KPIs":
+    st.header('📊 KPIs completos')
+    df_ent = load_table('entregas')
+    df_clients = load_table('clientes')
+    df = df_clients if not df_clients.empty else df_ent
+    if df.empty:
+        st.info('No hay datos para calcular KPIs')
+    else:
+        df = normalize_columns(df.copy())
+        total_clientes = len(df)
+        total_rutas = df['ruta'].nunique() if 'ruta' in df.columns else 0
+        atendidos = df[df.get('estado','').str.lower().isin(['entregado','atendido'])].shape[0] if 'estado' in df.columns else 0
+        pendientes = total_clientes - atendidos
+
+        # tiempo promedio si existen columnas
+        if 'hora_inicio' in df.columns and 'hora_fin' in df.columns:
+            try:
+                df['hora_inicio'] = pd.to_datetime(df['hora_inicio'])
+                df['hora_fin'] = pd.to_datetime(df['hora_fin'])
+                df['dur_min'] = (df['hora_fin'] - df['hora_inicio']).dt.total_seconds()/60
+                tiempo_promedio = round(df['dur_min'].mean(),2)
+            except Exception:
+                tiempo_promedio = 'No disponible'
         else:
-            heat_list = []
+            tiempo_promedio = 'No disponible'
 
-        m = folium.Map(location=[ubic['lat'].mean(), ubic['lon'].mean()], zoom_start=9)
-        if heat_list:
-            HeatMap(heat_list, radius=12, min_opacity=0.3).add_to(m)
-        st_folium(m, width=900, height=500)
+        # distancias
+        if 'lat' in df.columns and 'lon' in df.columns:
+            base_lat = df['lat'].mean()
+            base_lon = df['lon'].mean()
+            df['dist_km'] = df.apply(lambda r: haversine(base_lat, base_lon, r['lat'], r['lon']), axis=1)
+            distancia_total = round(df['dist_km'].sum(),2)
+            distancia_prom = round(df['dist_km'].mean(),2)
+            cliente_mas_lejano = df.sort_values(by='dist_km', ascending=False).iloc[0][['nombre','dist_km']].to_dict()
+            cliente_mas_cercano = df.sort_values(by='dist_km', ascending=True).iloc[0][['nombre','dist_km']].to_dict()
+        else:
+            distancia_total = distancia_prom = cliente_mas_lejano = cliente_mas_cercano = 'No disponible'
+
+        col1,col2,col3,col4 = st.columns(4)
+        col1.metric('Total clientes', total_clientes)
+        col2.metric('Total rutas', total_rutas)
+        col3.metric('Atendidos', atendidos)
+        col4.metric('% Entregados', f"{round((atendidos/total_clientes)*100,2) if total_clientes>0 else 0}%")
+
+        col5,col6,col7 = st.columns(3)
+        col5.metric('Tiempo promedio (min)', tiempo_promedio)
+        col6.metric('Distancia total (km)', distancia_total)
+        col7.metric('Dist prom por cliente (km)', distancia_prom)
 
         st.markdown('---')
-        st.subheader('Predicción simple entre origen y destino (simulada)')
-        todas = sorted(ubic['ubicacion'].unique()) if 'ubicacion' in ubic.columns else []
-        origen = st.selectbox('Origen', options=[''] + todas)
-        destino = st.selectbox('Destino', options=[''] + todas)
+        st.subheader('Clientes por ruta')
+        if 'ruta' in df.columns:
+            ruta_counts = df['ruta'].value_counts().reset_index()
+            ruta_counts.columns = ['ruta','clientes']
+            fig = px.bar(ruta_counts, x='ruta', y='clientes')
+            st.plotly_chart(fig, use_container_width=True)
 
-        if origen and destino and origen!=destino:
-            coords = {row['ubicacion']:[row['lat'], row['lon']] for _,row in ubic.iterrows()}
-            o = coords.get(origen)
-            d = coords.get(destino)
-            mapa = folium.Map(location=[(o[0]+d[0])/2,(o[1]+d[1])/2], zoom_start=12)
-            folium.Marker(o, popup='Origen').add_to(mapa)
-            folium.Marker(d, popup='Destino').add_to(mapa)
-            folium.PolyLine([o,d], color='blue', weight=4).add_to(mapa)
-            st_folium(mapa, width=900, height=500)
+        st.subheader('Ranking de clientes por distancia')
+        if 'dist_km' in df.columns:
+            st.dataframe(df[['nombre','ruta','dist_km']].sort_values(by='dist_km', ascending=False).head(50))
 
-            # simulación de tiempo
-            base = 20 + haversine(o[0],o[1],d[0],d[1])
-            est = int(base + random.randint(-5,10))
-            st.success(f"Tiempo estimado (simulado): {est} minutos")
-
-# ===============================
-# --- Seguimiento de Rutas (activa) ---
-# ===================================================
-elif selected == "Seguimiento de Rutas":
-    st.header("🚚 Seguimiento de Rutas Activas")
+# -----------------------------
+# Seguimiento: listado de rutas activas + mini-mapas
+# -----------------------------
+elif selected == "Seguimiento":
+    st.header('🚨 Seguimiento por ruta (Activas)')
     df_ent = load_table('entregas')
-    ubic = load_table('ubicaciones')
-
+    df_ubic = load_table('ubicaciones')
     if df_ent.empty:
-        st.info("No hay entregas registradas. Carga datos en 'Ver Datos' o crea pedidos en 'Ingresar Pedido'.")
+        st.info('No hay entregas registradas')
     else:
-        ordenes_activas = df_ent[df_ent['estado'].isin(['Activa','En Curso','activa','en curso'])]
-        if ordenes_activas.empty:
-            st.info('No hay rutas activas en este momento.')
+        df_ent = normalize_columns(df_ent.copy())
+        activos = df_ent[df_ent.get('estado','').str.lower().isin(['activa','en curso','enprogreso','en curso'])]
+        if activos.empty:
+            st.info('No hay rutas activas')
         else:
-            repartidores = ordenes_activas['repartidor'].dropna().unique().tolist()
-            sel_rep = st.selectbox('Filtrar por repartidor', options=['Todos']+list(repartidores))
-            if sel_rep!='Todos':
-                ordenes_activas = ordenes_activas[ordenes_activas['repartidor']==sel_rep]
-
-            st.subheader(f'Total rutas activas: {len(ordenes_activas)}')
-
-            # Preprocesar ubicaciones
-            ubic_map = {}
-            if not ubic.empty:
-                ubic = normalize_columns(ubic)
-                ubic['lat'] = pd.to_numeric(ubic['lat'], errors='coerce')
-                ubic['lon'] = pd.to_numeric(ubic['lon'], errors='coerce')
-                for _,r in ubic.iterrows():
-                    key = r.get('ubicacion') or r.get('nombre')
-                    if key:
-                        ubic_map[key]=[r['lat'],r['lon']]
-
-            default = [13.7,-89.2]
-
-            for _,row in ordenes_activas.iterrows():
-                with st.expander(f"Orden {row.get('orden_gestion','-')} — {row.get('nombre',row.get('ubicacion',''))}"):
-                    col1,col2 = st.columns([1,2])
+            for _, row in activos.iterrows():
+                with st.expander(f"Orden {row.get('orden_gestion','-')} — {row.get('nombre','')}"):
+                    col1, col2 = st.columns([1,2])
                     with col1:
                         st.markdown(f"**Repartidor:** {row.get('repartidor','N/A')}")
                         st.markdown(f"**Estado:** {row.get('estado')}")
                         st.markdown(f"**Inicio:** {row.get('inicio_ruta')}")
-                        # progreso básico
-                        tp = row.get('tiempo_predicho') or 0
-                        st.progress(0 if not tp else min(1, 0.5))
-                        if st.button('Marcar como Entregado', key=f'ent_{row.get("orden_gestion")}'):
+                        if st.button(f"Marcar Entregado {row.get('orden_gestion')}", key=f"ent_{row.get('orden_gestion')}"):
                             with engine.connect() as conn:
                                 conn.execute(text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion='{row.get('orden_gestion')}'"))
                                 conn.commit()
-                            st.success('Marcada como Entregada')
+                            st.success('Marcada como Entregado')
                             st.cache_data.clear()
                     with col2:
-                        origin = ubic_map.get(row.get('ubicacion'), default)
-                        dest = ubic_map.get(row.get('destino'), default)
-                        mapa_min = folium.Map(location=[(origin[0]+dest[0])/2,(origin[1]+dest[1])/2], zoom_start=12)
-                        folium.Marker(origin, popup='Origen').add_to(mapa_min)
-                        folium.Marker(dest, popup='Destino').add_to(mapa_min)
-                        folium.PolyLine([origin,dest], color='blue', weight=4).add_to(mapa_min)
-                        st_folium(mapa_min, width=600, height=300)
+                        origin = None
+                        dest = None
+                        if df_ubic is not None and not df_ubic.empty:
+                            du = normalize_columns(df_ubic.copy())
+                            du['lat'] = pd.to_numeric(du.get('lat'), errors='coerce')
+                            du['lon'] = pd.to_numeric(du.get('lon'), errors='coerce')
+                            origin = du[du.get('nombre')==row.get('ubicacion')] if 'nombre' in du.columns else None
+                        if origin is not None and not origin.empty:
+                            o = [origin.iloc[0]['lat'], origin.iloc[0]['lon']]
+                        else:
+                            o = [row.get('lat') or 13.7, row.get('lon') or -89.2]
+                        d = [row.get('lat'), row.get('lon')]
+                        m = folium.Map(location=[(o[0]+(d[0] or o[0]))/2,(o[1]+(d[1] or o[1]))/2], zoom_start=12)
+                        folium.Marker(o, popup='Origen').add_to(m)
+                        folium.Marker(d, popup='Destino').add_to(m)
+                        folium.PolyLine([o,d], color='blue', weight=4).add_to(m)
+                        st_folium(m, width=600, height=300)
 
-# ===============================
-# --- Sección Clientes (visualizar y filtrar) ---
-# ===================================================
-elif selected == "Clientes":
-    st.header('👥 Clientes — Visualización y Gestión')
-    df_clients = load_table('clientes')
-
-    if df_clients.empty:
-        st.info('No hay clientes en la base de datos. Suba el archivo en "Ver Datos".')
-    else:
-        dfc = normalize_columns(df_clients.copy())
-        dfc['lat'] = pd.to_numeric(dfc['lat'], errors='coerce')
-        dfc['lon'] = pd.to_numeric(dfc['lon'], errors='coerce')
-
-        st.subheader('📋 Tabla de Clientes (soporta grandes volúmenes)')
-        st.dataframe(dfc, use_container_width=True)
-
-        st.subheader('🔎 Filtros')
-        cols = st.multiselect('Mostrar columnas', options=list(dfc.columns), default=['nombre','ruta','lat','lon','municipio'])
-        filtros = st.columns(3)
-        ruta_f = filtros[0].multiselect('Ruta', options=dfc['ruta'].unique())
-        depto_f = filtros[1].multiselect('Departamento', options=dfc['departamento'].unique() if 'departamento' in dfc.columns else [])
-        estado_f = filtros[2].multiselect('Estado', options=dfc['estado'].unique() if 'estado' in dfc.columns else [])
-
-        dfc_filtered = dfc.copy()
-        if ruta_f: dfc_filtered = dfc_filtered[dfc_filtered['ruta'].isin(ruta_f)]
-        if depto_f and 'departamento' in dfc_filtered.columns: dfc_filtered = dfc_filtered[dfc_filtered['departamento'].isin(depto_f)]
-        if estado_f and 'estado' in dfc_filtered.columns: dfc_filtered = dfc_filtered[dfc_filtered['estado'].isin(estado_f)]
-
-        st.dataframe(dfc_filtered[cols], use_container_width=True)
-
-# ===============================
-# --- Borrar Datos (peligroso) ---
-# ===================================================
+# -----------------------------
+# Borrar datos
+# -----------------------------
 elif selected == "Borrar Datos":
     st.header('🗑️ Borrar datos (Peligroso)')
-    st.warning('Esto eliminará todas las tablas gestionadas: clientes, ubicaciones, entregas')
+    st.warning('Esto eliminará las tablas: clientes, ubicaciones, entregas')
     if st.button('Borrar TODO'):
         try:
             clear_table('clientes')
             clear_table('ubicaciones')
             clear_table('entregas')
-            st.success('Tablas borradas correctamente.')
+            st.success('Tablas borradas')
             st.cache_data.clear()
         except Exception as e:
-            st.error(f'Error al borrar tablas: {e}')
+            st.error(f'Error: {e}')
+
+# ==============================
+# FIN
+# ==============================
