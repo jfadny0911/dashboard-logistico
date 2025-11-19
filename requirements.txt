@@ -1,8 +1,5 @@
 streamlit
-sqlalchemy
-psycopg2-binary
-pandas
-openpyxl
-plotly
+streamlit-option-menu
 folium
 streamlit-folium
+pandas
