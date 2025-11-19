@@ -120,9 +120,7 @@ if menu == "Ver Datos":
     # GUÍA DE COLUMNAS AÑADIDA AQUÍ
     st.subheader("💡 Guía de Estructura de Archivo CSV/Excel")
     st.markdown("""
-    **Para una carga correcta, tu archivo CSV debe tener los siguientes nombres y formatos de columna** (el orden es flexible).
-    
-    Si tu archivo está **fusionado** (una sola columna con todo el texto), el sistema intentará separarlo usando la coma (`,`) como delimitador.
+    Para una carga correcta, tu archivo CSV debe tener los siguientes **nombres y formatos de columna** (el orden es flexible). **¡No deben estar fusionados!**
     """)
     
     # Tabla con la guía de formato
@@ -152,45 +150,10 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
-                    # **INICIO DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
-                    # Si solo hay una columna y el nombre contiene la palabra clave 'ubicacion' o 'departamento', intentar dividirla.
-                    if df_to_load.shape[1] == 1 and ('ubicacion' in df_to_load.columns[0] or 'departamento' in df_to_load.columns[0]):
-                        st.warning("Detectado CSV mal formado (columnas fusionadas). Intentando reestructurar...")
-                        
-                        corrupt_col_name = df_to_load.columns[0]
-                        
-                        # Campos clave que se encuentran al inicio de su CSV fusionado
-                        new_split_names = [
-                            'ubicacion', 'municipio', 'departamento', 'fecha', 'hora', 
-                            'zona', 'tipo_pedido', 'clima', 'trafico', 'tiempo_entrega', 'retraso'
-                        ]
-                        
-                        # Divide la columna fusionada usando la coma
-                        split_cols = df_to_load[corrupt_col_name].astype(str).str.split(',', expand=True)
-                        
-                        if split_cols.shape[1] >= len(new_split_names):
-                            split_cols = split_cols.iloc[:, :len(new_split_names)]
-                            split_cols.columns = new_split_names
-                            
-                            # Concatenar los campos corregidos
-                            df_processed = pd.concat([split_cols, df_to_load.iloc[:, 1:].reset_index(drop=True)], axis=1)
-                            
-                            # Normalizar nombres de columna nuevamente después de la concatenación
-                            df_processed.columns = [
-                                re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
-                                for col in df_processed.columns
-                            ]
-                            
-                            df_to_load = df_processed
-                            st.success("CSV reestructurado con éxito.")
-                        else:
-                            st.error("Error: La columna fusionada no contiene suficientes campos. Por favor, revisa el formato.")
-                           
-
-                    # 3. Verificar la existencia de la columna departamento después de la normalización/corrección
+                    # Verificar la existencia de la columna departamento antes de continuar
                     if 'departamento' not in df_to_load.columns:
-                        st.error("Error crítico: La columna 'departamento' no fue encontrada. Revisa tu archivo CSV.")
-                     
+                        st.error("Error crítico: La columna 'departamento' no fue encontrada después de la normalización. Revisa tu archivo CSV.")
+                        return
 
                     # Lógica estándar de verificación de columnas
                     if 'orden_gestion' not in df_to_load.columns:
@@ -454,13 +417,11 @@ elif menu == "Predicción de Rutas":
         if not all(col in ubicaciones_df.columns for col in col_map.values()):
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
-            # CORRECCIÓN DE LA CONVERSIÓN DE COORDENADAS:
-            ubicaciones_df['latitud'] = ubicaciones_df['latitud'].apply(clean_coord)
-            ubicaciones_df['longitud'] = ubicaciones_df['longitud'].apply(clean_coord)
+            # Se asume que las columnas ya están limpias y nombradas ('latitud', 'longitud')
             
+            # Convertir a numérico (Float) para asegurar que Folium pueda usarlas
             ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
             ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
-            # FIN DE LA CORRECCIÓN
 
             ubicaciones_df.dropna(subset=['latitud', 'longitud'], inplace=True)
 
@@ -635,11 +596,11 @@ elif menu == "Seguimiento de Rutas":
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
                 # Coordenadas para enlaces
-                # Limpiamos las coordenadas aquí también, ya que la sesión puede perder el estado limpio
+                # Se asume que ubicaciones_df_cleaned ya tiene los nombres de columna correctos y limpios.
                 ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
                 if ubicaciones_df_cleaned is not None:
-                     ubicaciones_df_cleaned['latitud'] = ubicaciones_df_cleaned['latitud'].apply(clean_coord)
-                     ubicaciones_df_cleaned['longitud'] = ubicaciones_df_cleaned['longitud'].apply(clean_coord)
+                    
+                     # Convertir a numérico (Float) para asegurar que Folium pueda usarlas
                      ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
                      ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
