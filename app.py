@@ -384,154 +384,86 @@ elif menu == "Ingresar Pedido":
                 except Exception as e:
                     st.error(f"❌ Error al guardar el pedido: {e}")
 
-# --- 🚚 Predicción de Rutas simuladas ---
-elif menu == "Predicción de Rutas":
-    st.header("🚚 Predicción de Rutas en El Salvador (Simulación)")
-    
-    st.markdown("""
-    **🚨 ¡Atención! Para que los mapas y la predicción funcionen, debes subir aquí un archivo CSV con las coordenadas de tus ubicaciones únicas.**
-    Este archivo debe contener las columnas: **`Ubicación`**, **`Latitud`** y **`Longitud`**.
-    """)
-    uploaded_file = st.file_uploader("Sube el archivo de ubicaciones con coordenadas (CSV)", type=["csv"], key="ubicaciones_file_uploader")
-    
-    if uploaded_file is not None:
-        try:
-            # Usar coma como delimitador para archivos de coordenadas
-            ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file, delimiter=',')
+# 🔧 Normalizar encabezados
+# -----------------------------------------
+def normalize_cols(df):
+    df.columns = [
+        re.sub(r'[^a-z0-9_]', '', col.lower().replace('á','a')
+        .replace('é','e').replace('í','i').replace('ó','o')
+        .replace('ú','u').replace('ñ','n')).strip()
+        for col in df.columns
+    ]
+    return df
+
+# -----------------------------------------
+# 🔧 Renombrar columnas comunes
+# -----------------------------------------
+def apply_column_map(df):
+    rename_map = {
+        'latitude': 'latitud',
+        'lat': 'latitud',
+        'latitud_': 'latitud',  # por si queda con _ al final
+        'lng': 'longitud',
+        'lon': 'longitud',
+        'long': 'longitud',
+        'longitud_': 'longitud',
+        'location': 'ubicacion',
+        'direccion': 'ubicacion',
+        'sucursal': 'ubicacion'
+    }
+
+    df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
+    return df
+
+# -----------------------------------------
+# 🔧 Validación de columnas obligatorias
+# -----------------------------------------
+def validate_location_columns(df):
+    required = ['ubicacion', 'latitud', 'longitud']
+    missing = [c for c in required if c not in df.columns]
+
+    if missing:
+        st.error(f"❌ El archivo NO contiene las columnas requeridas: {missing}")
+        st.stop()
+
+# -----------------------------------------
+# 🔧 Configuración visual
+# -----------------------------------------
+st.set_page_config(page_title="Predicción y Seguimiento de Rutas", layout="wide")
+st.title("🚚 Predicción y Seguimiento de Rutas en Tiempo Real")
+
+menu = st.sidebar.radio("Menú", ["Predicción de Rutas", "Seguimiento de Rutas"])
+
+
+# ==============================================================================
+# 🟦 **PREDICCIÓN DE RUTAS**
+# ==============================================================================
+if menu == "Predicción de Rutas":
+    st.header("📍 Cargar archivo de ubicaciones")
+
+    uploaded_file = st.file_uploader("Sube archivo CSV:", type="csv")
+
+    if uploaded_file:
+        ubicaciones_df = read_uploaded_csv_with_encoding(uploaded_file)
+
+        if ubicaciones_df is not None:
+
+            ubicaciones_df = normalize_cols(ubicaciones_df)
+            ubicaciones_df = apply_column_map(ubicaciones_df)
+
+            validate_location_columns(ubicaciones_df)
+
+            st.success("Archivo cargado correctamente.")
+            st.write("Columnas detectadas:", ubicaciones_df.columns.tolist())
+            st.dataframe(ubicaciones_df)
+
             st.session_state['ubicaciones_df'] = ubicaciones_df
-        except Exception as e:
-            st.error(f"❌ Error al procesar el archivo: {e}")
 
-    if 'ubicaciones_df' in st.session_state and st.session_state['ubicaciones_df'] is not None:
-        ubicaciones_df = st.session_state['ubicaciones_df'].copy()
-        
-        # Normalización de nombres de columna
-        ubicaciones_df.columns = [
-            re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
-            for col in ubicaciones_df.columns
-        ]
-        
-        col_map = {'ubicacion': 'ubicacion', 'latitud': 'latitud', 'longitud': 'longitud'}
-        
-        if not all(col in ubicaciones_df.columns for col in col_map.values()):
-            st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
-        else:
-            # Conversión de coordenadas a numérico después de la limpieza de nombres:
-            ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
-            ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
 
-            ubicaciones_df.dropna(subset=['latitud', 'longitud'], inplace=True)
 
-            todas_ubicaciones = sorted(ubicaciones_df['ubicacion'].unique())
-            df_entregas = load_data_from_db()
-
-            # =======================================================
-            # 🗺️ Generar Mapa de Calor (HeatMap) de Zonas de Tráfico
-            # =======================================================
-            st.subheader("Zonas de Alta Demanda (HeatMap)")
-            
-            if not df_entregas.empty:
-                df_pedidos_coords = df_entregas.groupby('ubicacion').size().reset_index(name='frecuencia')
-                
-                heatmap_data = pd.merge(
-                    df_pedidos_coords, 
-                    ubicaciones_df[['ubicacion', 'latitud', 'longitud']], 
-                    on='ubicacion', 
-                    how='inner'
-                )
-                
-                heatmap_list = heatmap_data[['latitud', 'longitud', 'frecuencia']].values.tolist()
-            else:
-                heatmap_list = [] 
-
-            mapa_heatmap = folium.Map(location=[13.7942, -88.8965], zoom_start=8)
-            
-            if heatmap_list:
-                HeatMap(heatmap_list, 
-                        radius=15, 
-                        max_val=heatmap_data['frecuencia'].max() + 1, 
-                        min_opacity=0.2).add_to(mapa_heatmap)
-                st.info("El mapa de calor muestra las zonas con mayor frecuencia de pedidos.")
-
-            st_folium(mapa_heatmap, width=700, height=500)
-            
-            # =======================================================
-            # 👇 Lógica de Predicción de Rutas Específicas
-            # =======================================================
-            st.markdown("---")
-            st.subheader("Predicción de Rutas Específicas")
-
-            if not df_entregas.empty:
-                # Verifica que 'ubicacion' y 'departamento' estén en df_entregas
-                if 'ubicacion' not in df_entregas.columns or 'departamento' not in df_entregas.columns:
-                     st.warning("Advertencia: Las columnas 'ubicacion' y/o 'departamento' no están en la BD. Por favor, recarga el archivo de entregas en 'Ver Datos'.")
-                     st.stop()
-                     
-                ordenes_pendientes = df_entregas[df_entregas['estado'] == 'Pendiente']['orden_gestion'].unique()
-                selected_orden = st.selectbox("Selecciona una orden de gestión pendiente:", [''] + sorted(ordenes_pendientes))
-
-                if selected_orden:
-                    orden_data = df_entregas[df_entregas['orden_gestion'] == selected_orden].iloc[0]
-                    origen_prediccion = orden_data['ubicacion']
-                    
-                    st.subheader(f"Ruta para la orden '{selected_orden}':")
-                    st.info(f"Origen: {origen_prediccion} | Repartidor asignado: **{orden_data.get('repartidor', 'N/A')}**")
-                    
-                    todas_ubicaciones_sin_origen = [ubic for ubic in todas_ubicaciones if ubic != origen_prediccion]
-                    destino_prediccion = st.selectbox("Selecciona el destino:", todas_ubicaciones_sin_origen, key="destino_prediccion")
-                    
-                    if origen_prediccion and destino_prediccion and origen_prediccion != destino_prediccion:
-                        coordenadas = {
-                            row['ubicacion']: [row['latitud'], row['longitud']]
-                            for index, row in ubicaciones_df.iterrows()
-                        }
-                        
-                        default_coords = [13.7, -89.2]
-                        origen_coords = coordenadas.get(origen_prediccion, default_coords)
-                        destino_coords = coordenadas.get(destino_prediccion, default_coords)
-                        
-                        # Mapa de la ruta específica 
-                        mapa_ruta = folium.Map(location=[(origen_coords[0] + destino_coords[0]) / 2, (origen_coords[1] + destino_coords[1]) / 2], zoom_start=10)
-                        folium.Marker(origen_coords, popup=f"Origen: {origen_prediccion}", icon=folium.Icon(color="green")).add_to(mapa_ruta)
-                        folium.Marker(destino_coords, popup=f"Destino: {destino_prediccion}", icon=folium.Icon(color="red")).add_to(mapa_ruta)
-                        folium.PolyLine([origen_coords, destino_coords], color="blue", weight=4, opacity=0.8).add_to(mapa_ruta)
-                        st_folium(mapa_ruta, width=700, height=500)
-                        
-                        # Cálculo de tiempo estimado (simulación)
-                        base_time = 30
-                        if orden_data['trafico'] == 'Medio': base_time += 15
-                        elif orden_data['trafico'] == 'Alto': base_time += 30
-                        if orden_data['clima'] == 'Lluvioso': base_time += 10
-                        tiempo_estimado = random.randint(base_time - 5, base_time + 5)
-                        
-                        st.success(f"⏱️ Tiempo estimado: {tiempo_estimado} minutos")
-                        st.info(f"Condiciones: Tráfico {orden_data['trafico']} | Clima {orden_data['clima']}")
-                        
-                        if st.button("Iniciar Ruta"):
-                            try:
-                                with engine.connect() as conn:
-                                    conn.execute(text(f"""
-                                        UPDATE entregas 
-                                        SET estado = 'Activa', 
-                                            inicio_ruta = '{datetime.now()}', 
-                                            destino = '{destino_prediccion}', 
-                                            tiempo_predicho = {tiempo_estimado}
-                                        WHERE orden_gestion = '{selected_orden}'
-                                    """))
-                                    conn.commit()
-                                st.success(f"✅ Gestión '{selected_orden}' iniciada y marcada como Activa.")
-                                st.cache_data.clear()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error al iniciar la ruta: {e}")
-                    else:
-                        st.warning("El origen y destino no pueden ser iguales.")
-            else:
-                st.info("No hay datos en la base de datos para mostrar las predicciones de ruta.")
-    else:
-        st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
-
-# --- Sección para seguimiento de rutas (REDISENADA) ---
+# ==============================================================================
+# 🟩 **SEGUIMIENTO DE RUTAS**
+# ==============================================================================
 elif menu == "Seguimiento de Rutas":
     st.header("🗺 Seguimiento de Rutas")
 
