@@ -533,139 +533,36 @@ elif menu == "Predicción de Rutas":
 
 # --- Sección para seguimiento de rutas (REDISENADA) ---
 elif menu == "Seguimiento de Rutas":
-    st.header("🚚 Seguimiento de Rutas Activas")
-    
-    df_entregas = load_data_from_db()
-    ubicaciones_df = st.session_state.get('ubicaciones_df')
+    st.header("🗺 Seguimiento de Rutas")
 
-    if df_entregas.empty or ubicaciones_df is None or ubicaciones_df.empty:
-        st.warning("⚠️ Faltan datos: Por favor, asegúrate de haber cargado la Base de Datos en 'Ver Datos' y el archivo de Ubicaciones en 'Predicción de Rutas'.")
+    if 'ubicaciones_df' not in st.session_state:
+        st.warning("⚠ Primero debes subir el archivo en 'Predicción de Rutas'")
         st.stop()
-    
-    # Pre-procesar coordenadas una vez
-    ubicaciones_df_cleaned = ubicaciones_df.copy()
-    ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
-    ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
-    coordenadas = {
-        loc['ubicacion']: [loc['latitud'], loc['longitud']]
-        for _, loc in ubicaciones_df_cleaned.iterrows()
-    }
-    default_coords = [13.75, -88.9]
+    ubicaciones_df = st.session_state['ubicaciones_df']
 
-    ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
-    
-    if 'repartidor' not in ordenes_activas.columns:
-        st.error("Error: La base de datos no tiene la columna 'repartidor'. Por favor, **borra y sube tus datos nuevamente** en la sección 'Ver Datos'.")
-        st.stop()
-    
-    # Filtro de Repartidor
-    repartidores_activos = ordenes_activas['repartidor'].unique()
-    selected_repartidor_seguimiento = st.selectbox(
-        "Filtrar por Repartidor:",
-        options=['Todos'] + sorted(repartidores_activos)
+    ubicaciones_df = normalize_cols(ubicaciones_df)
+    ubicaciones_df = apply_column_map(ubicaciones_df)
+    validate_location_columns(ubicaciones_df)
+
+    # Convertir a numérico
+    ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
+    ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
+
+    # Eliminar coordenadas inválidas
+    ubicaciones_df.dropna(subset=['latitud', 'longitud'], inplace=True)
+
+    st.subheader("📌 Mapa de Ubicaciones")
+    st.map(
+        ubicaciones_df[['latitud', 'longitud']].rename(
+            columns={'latitud': 'latitude', 'longitud': 'longitude'}
+        )
     )
-    
-    if selected_repartidor_seguimiento != 'Todos':
-        ordenes_activas = ordenes_activas[ordenes_activas['repartidor'] == selected_repartidor_seguimiento]
 
-    if ordenes_activas.empty:
-        st.info("No hay gestiones activas que coincidan con los filtros.")
-        st.stop()
+    st.subheader("📄 Datos utilizados en el mapa")
+    st.dataframe(ubicaciones_df)
 
-    
-    st.subheader(f"Total de rutas activas: {len(ordenes_activas)}")
-    st.markdown("---")
-
-
-    for index, row in ordenes_activas.iterrows():
-        
-        # --- LÓGICA ROBUSTA DE TIEMPO Y PROGRESO ---
-        try:
-            # Asegurar que inicio_ruta no sea None y tenga formato de fecha
-            inicio_ruta_str = str(row['inicio_ruta'])
-            if inicio_ruta_str == 'None':
-                st.info(f"🔴 Orden {row['orden_gestion']} no iniciada: Falta hora de inicio. Estado: Activa.")
-                continue
-
-            try:
-                inicio_ruta_dt = datetime.strptime(inicio_ruta_str, "%Y-%m-%d %H:%M:%S.%f")
-            except ValueError:
-                inicio_ruta_dt = datetime.strptime(inicio_ruta_str.split('.')[0], "%Y-%m-%d %H:%M:%S")
-
-            tiempo_predicho_min = row['tiempo_predicho']
-            if tiempo_predicho_min is None or tiempo_predicho_min <= 0:
-                st.error(f"❌ Orden {row['orden_gestion']}: Tiempo predicho inválido (0 o Nulo).")
-                continue
-
-            tiempo_transcurrido = datetime.now() - inicio_ruta_dt
-            tiempo_restante_segundos = tiempo_predicho_min * 60 - tiempo_transcurrido.total_seconds()
-
-            if tiempo_restante_segundos < 0:
-                progreso = 1.0
-                tiempo_restante_str = "¡Retraso!"
-                estado_progreso = "🔴 En Retraso"
-                color_progreso = "red"
-            else:
-                progreso = 1 - (tiempo_restante_segundos / (tiempo_predicho_min * 60))
-                total_segundos = int(tiempo_restante_segundos)
-                horas = total_segundos // 3600
-                minutos = (total_segundos % 3600) // 60
-                segundos = total_segundos % 60
-                tiempo_restante_str = f"{minutos:02d}m {segundos:02d}s"
-                estado_progreso = "En Curso"
-                color_progreso = "blue"
-
-        except Exception as e:
-            st.error(f"Error interno al calcular tiempo para orden {row['orden_gestion']}.")
-            continue
-
-        
-        # --- VISUALIZACIÓN MODERNA (TARJETA) ---
-        col_id, col_repartidor, col_estado, col_tiempo_restante = st.columns([1, 2, 2, 1.5])
-        
-        col_id.metric(f"ORDEN", f"#{row['orden_gestion']}")
-        col_repartidor.metric("REPARTIDOR", row['repartidor'])
-        col_estado.metric("ESTADO RUTA", estado_progreso)
-        col_tiempo_restante.metric("RESTANTE", tiempo_restante_str)
-        
-        # Mapa en miniatura
-        origen_coords = coordenadas.get(row['ubicacion'], default_coords)
-        destino_coords = coordenadas.get(row['destino'], default_coords)
-        
-        with st.expander(f"Detalles de la Ruta - {row['ubicacion']} a {row['destino']}"):
-            
-            col_progreso, col_mapa = st.columns([1, 1])
-            
-            with col_progreso:
-                st.markdown(f"**Progreso ({int(progreso * 100)}% completado)**")
-                st.progress(progreso)
-                
-                st.markdown(f"**Inicio:** {inicio_ruta_dt.strftime('%H:%M:%S')}")
-                st.markdown(f"**Estimado Total:** {int(row['tiempo_predicho'])} min")
-                st.markdown(f"**Condiciones:** {row['clima']} | {row['trafico']}")
-                
-                st.markdown("---")
-                if st.button("Marcar como Entregado", key=f"entregar_{row['orden_gestion']}"):
-                    with engine.connect() as conn:
-                        conn.execute(text(f"UPDATE entregas SET estado = 'Entregado' WHERE orden_gestion = '{row['orden_gestion']}'"))
-                        conn.commit()
-                    st.success(f"✅ Gestión '{row['orden_gestion']}' marcada como Entregada.")
-                    st.cache_data.clear()
-                    st.rerun()
-
-            with col_mapa:
-                # Generar mapa de ruta
-                mapa_ruta_min = folium.Map(location=[(origen_coords[0] + destino_coords[0]) / 2, (origen_coords[1] + destino_coords[1]) / 2], zoom_start=12)
-                folium.Marker(origen_coords, popup="Origen", icon=folium.Icon(color="green", icon="play")).add_to(mapa_ruta_min)
-                folium.Marker(destino_coords, popup="Destino", icon=folium.Icon(color="red", icon="flag")).add_to(mapa_ruta_min)
-                folium.PolyLine([origen_coords, destino_coords], color=color_progreso, weight=5).add_to(mapa_ruta_min)
-                
-                st_folium(mapa_ruta_min, width=350, height=300, key=f"map_{row['orden_gestion']}")
-                
-                st.markdown(f"[Abrir en Google Maps](http://maps.google.com/maps?saddr={origen_coords[0]},{origen_coords[1]}&daddr={destino_coords[0]},{destino_coords[1]})")
-        
-        st.markdown("---")
+    st.success("Seguimiento cargado exitosamente.")
 
 # --- 🗑️ Sección para borrar datos ---
 elif menu == "Borrar Datos":
