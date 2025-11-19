@@ -5,4 +5,4 @@ plotly
 folium
 streamlit-folium
 sqlalchemy
-google-genai  <-- ¡Esta es la línea clave!
+google-genai  
