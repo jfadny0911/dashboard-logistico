@@ -406,7 +406,7 @@ elif menu == "Predicción de Rutas":
     if 'ubicaciones_df' in st.session_state and st.session_state['ubicaciones_df'] is not None:
         ubicaciones_df = st.session_state['ubicaciones_df'].copy()
         
-        # Normalización de columnas del archivo de ubicaciones
+        # Normalización de nombres de columna (solo las que se cargan)
         ubicaciones_df.columns = [
             re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
             for col in ubicaciones_df.columns
@@ -417,7 +417,7 @@ elif menu == "Predicción de Rutas":
         if not all(col in ubicaciones_df.columns for col in col_map.values()):
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
-            # Conversión de coordenadas a numérico después de la limpieza de nombres:
+            # Conversión de coordenadas a numérico
             ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
             ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
 
@@ -594,10 +594,11 @@ elif menu == "Seguimiento de Rutas":
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
                 # Coordenadas para enlaces
-                # Limpiamos las coordenadas aquí, asumiendo que el DF de la sesión ya tiene nombres correctos
+                # Asumimos que ubicaciones_df_cleaned ya tiene los nombres de columna correctos.
                 ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
                 if ubicaciones_df_cleaned is not None:
-                     # Aplicar limpieza de números directamente al DataFrame de la sesión
+                     
+                     # Conversión a numérico (Float) para asegurar que Folium pueda usarlas
                      ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
                      ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
