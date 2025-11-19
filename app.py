@@ -120,7 +120,9 @@ if menu == "Ver Datos":
     # GUÍA DE COLUMNAS AÑADIDA AQUÍ
     st.subheader("💡 Guía de Estructura de Archivo CSV/Excel")
     st.markdown("""
-    Para una carga correcta, tu archivo CSV debe tener los siguientes **nombres y formatos de columna** (el orden es flexible). **¡No deben estar fusionados!**
+    **Para una carga correcta, tu archivo CSV debe tener los siguientes nombres y formatos de columna** (el orden es flexible).
+    
+    Si tu archivo está **fusionado** (una sola columna con todo el texto), el sistema intentará separarlo usando la coma (`,`) como delimitador.
     """)
     
     # Tabla con la guía de formato
@@ -150,12 +152,47 @@ if menu == "Ver Datos":
                         for col in df_to_load.columns
                     ]
                     
-                    # Verificar la existencia de la columna departamento antes de continuar
-                    if 'departamento' not in df_to_load.columns:
-                        st.error("Error crítico: La columna 'departamento' no fue encontrada después de la normalización. Revisa tu archivo CSV.")
+                    # **INICIO DEL BLOQUE DE CORRECCIÓN DE CSV MAL FORMADO**
+                    # Si solo hay una columna y el nombre contiene la palabra clave 'ubicacion' o 'departamento', intentar dividirla.
+                    if df_to_load.shape[1] == 1 and ('ubicacion' in df_to_load.columns[0] or 'departamento' in df_to_load.columns[0]):
+                        st.warning("Detectado CSV mal formado (columnas fusionadas). Intentando reestructurar...")
                         
+                        corrupt_col_name = df_to_load.columns[0]
+                        
+                        # Campos clave que se encuentran al inicio de su CSV fusionado
+                        new_split_names = [
+                            'ubicacion', 'municipio', 'departamento', 'fecha', 'hora', 
+                            'zona', 'tipo_pedido', 'clima', 'trafico', 'tiempo_entrega', 'retraso'
+                        ]
+                        
+                        # Divide la columna fusionada usando la coma
+                        split_cols = df_to_load[corrupt_col_name].astype(str).str.split(',', expand=True)
+                        
+                        if split_cols.shape[1] >= len(new_split_names):
+                            split_cols = split_cols.iloc[:, :len(new_split_names)]
+                            split_cols.columns = new_split_names
+                            
+                            # Concatenar los campos corregidos
+                            df_processed = pd.concat([split_cols, df_to_load.iloc[:, 1:].reset_index(drop=True)], axis=1)
+                            
+                            # Normalizar nombres de columna nuevamente después de la concatenación
+                            df_processed.columns = [
+                                re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
+                                for col in df_processed.columns
+                            ]
+                            
+                            df_to_load = df_processed
+                            st.success("CSV reestructurado con éxito.")
+                        else:
+                            st.error("Error: La columna fusionada no contiene suficientes campos. Por favor, revisa el formato.")
+                            return
 
-                    # Verificar y agregar columnas si no existen (Lógica estándar)
+                    # 3. Verificar la existencia de la columna departamento después de la normalización/corrección
+                    if 'departamento' not in df_to_load.columns:
+                        st.error("Error crítico: La columna 'departamento' no fue encontrada. Revisa tu archivo CSV.")
+                        return
+
+                    # Lógica estándar de verificación de columnas
                     if 'orden_gestion' not in df_to_load.columns:
                         df_to_load['orden_gestion'] = [f"{i:04d}" for i in range(1, len(df_to_load) + 1)]
                         st.info("Columna 'orden_gestion' agregada automáticamente.")
