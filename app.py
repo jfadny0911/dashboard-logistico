@@ -153,7 +153,7 @@ if menu == "Ver Datos":
                     # Verificar la existencia de la columna departamento antes de continuar
                     if 'departamento' not in df_to_load.columns:
                         st.error("Error crítico: La columna 'departamento' no fue encontrada después de la normalización. Revisa tu archivo CSV.")
-                        
+                        return
 
                     # Lógica estándar de verificación de columnas
                     if 'orden_gestion' not in df_to_load.columns:
@@ -417,9 +417,7 @@ elif menu == "Predicción de Rutas":
         if not all(col in ubicaciones_df.columns for col in col_map.values()):
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
-            # Se asume que las columnas ya están limpias y nombradas ('latitud', 'longitud')
-            
-            # Convertir a numérico (Float) para asegurar que Folium pueda usarlas
+            # Conversión de coordenadas a numérico después de la limpieza de nombres:
             ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
             ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
 
@@ -596,11 +594,10 @@ elif menu == "Seguimiento de Rutas":
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
                 # Coordenadas para enlaces
-                # Se asume que ubicaciones_df_cleaned ya tiene los nombres de columna correctos y limpios.
+                # Limpiamos las coordenadas aquí, asumiendo que el DF de la sesión ya tiene nombres correctos
                 ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
                 if ubicaciones_df_cleaned is not None:
-                    
-                     # Convertir a numérico (Float) para asegurar que Folium pueda usarlas
+                     # Aplicar limpieza de números directamente al DataFrame de la sesión
                      ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
                      ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
