@@ -1,8 +1,6 @@
-# app.py - ChivoFast Dashboard (Optimized)
 import os
 import streamlit as st
 import pandas as pd
-import numpy as np
 from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
@@ -13,28 +11,35 @@ import random
 from io import StringIO
 import re
 from datetime import datetime, timedelta
-import math
-from typing import Optional, Tuple
+import time
+import numpy as np 
+from google import genai # Importación de la librería de Google GenAI
 
-# ----------------------------
-# Config / sample file paths (adjust if needed)
-SAMPLE_CLIENTES = "/mnt/data/reporte_pedidos_entregados_colab.csv"
-SAMPLE_UBIC = "/mnt/data/ubicaciones_unicas_colab (1).csv"
-# ----------------------------
+# ===============================
+# 🔗 CLAVE API Y CONEXIÓN A LA BASE DE DATOS
+# ===================================================
+# --- CLAVE GEMINI (INTEGRADA DIRECTAMENTE) ---
+# NOTA: En un entorno de producción, esta clave DEBE estar en una variable de entorno.
+GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
 
-# Database default (SQLite for portability)
+# Base de datos (SQLite para portabilidad)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
+# Inicialización del Cliente Gemini
+client = None
+if GEMINI_API_KEY:
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
+
+# Lista de repartidores disponibles (para simulación)
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
-# Definiciones para el Agente IA (para simulación)
-TIPO_PEDIDO = ["restaurante", "supermercado", "tienda_en_linea", "farmacia"] # Usando minúsculas normalizadas
-CLIMA = ["soleado", "nublado", "lluvioso", "tormenta"]
-TRAFICO = ["bajo", "medio", "alto"]
-
-st.set_page_config(page_title="ChivoFast — Optimized Dashboard", layout="wide")
-st.title("📦 ChivoFast — Optimized Dashboard")
+# Configuración de página
+st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
+st.title("📦 Dashboard Predictivo - ChivoFast")
 
 # -----------------------------
 # Utilities
@@ -68,16 +73,18 @@ def read_csv_cached(uploaded_file, delimiter=','):
     Accepts either a path (str) or a file-like object from Streamlit uploader.
     """
     encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
-    # if string path, read directly
+    
+    # Check if the input is a file path (string) or an uploaded file object
     if isinstance(uploaded_file, str):
         for enc in encodings:
             try:
-                df = pd.read_csv(uploaded_file, encoding=enc)
+                df = pd.read_csv(uploaded_file, encoding=enc, sep=delimiter)
                 return df
             except Exception:
                 continue
         return None
 
+    # Handle Streamlit uploaded file object
     for enc in encodings:
         try:
             content = uploaded_file.getvalue().decode(enc)
@@ -86,6 +93,7 @@ def read_csv_cached(uploaded_file, delimiter=','):
         except Exception:
             continue
     return None
+
 
 @st.cache_data(ttl=300)
 def check_table_exists_local(name: str) -> bool:
@@ -157,62 +165,63 @@ def haversine_vectorized(lat1, lon1, lat2, lon2):
     return res
 
 # -------------------------------------------------------------------
-# 🤖 LÓGICA DEL AGENTE DE ANÁLISIS IA (SIMULADA)
+# 🤖 LÓGICA DEL AGENTE DE ANÁLISIS IA (CON CONEXIÓN A GEMINI)
 # -------------------------------------------------------------------
 
-def run_ai_analysis(df_input: pd.DataFrame, query: str):
+def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     """
-    Simula la respuesta de un agente IA basado en análisis de lenguaje natural sobre el DataFrame.
+    Se conecta a Gemini para analizar el DataFrame y la consulta del usuario.
     """
-    query_lower = query.lower()
-    df = df_input.copy()
+    global client
     
-    # Asegurar columnas clave
-    if 'repartidor' not in df.columns or 'retraso' not in df.columns or 'tiempo_entrega' not in df.columns:
-         return "⚠️ Error: Faltan columnas esenciales (repartidor, retraso, tiempo_entrega) para el análisis."
+    if not client:
+        return "⚠️ Error de Conexión: El cliente Gemini no está inicializado. Verifica tu clave API."
 
-    # 1. Preguntas sobre Repartidores
-    for rep in REPARTIDORES:
-        if rep.lower() in query_lower:
-            df_rep = df[df['repartidor'].astype(str).str.contains(rep, case=False, na=False)]
-            if not df_rep.empty:
-                df_rep['retraso'] = pd.to_numeric(df_rep['retraso'], errors='coerce')
-                df_rep['tiempo_entrega'] = pd.to_numeric(df_rep['tiempo_entrega'], errors='coerce')
-                
-                avg_delay = df_rep['retraso'].mean()
-                total_deliveries = len(df_rep)
-                
-                if "retraso promedio" in query_lower or "demora" in query_lower:
-                    return f"El repartidor **{rep}** tiene un retraso promedio de **{avg_delay:.1f} minutos** en {total_deliveries} entregas registradas."
-                
-                if "entregas" in query_lower or "pedidos" in query_lower:
-                    return f"**{rep}** ha completado {total_deliveries} entregas. Su mejor tiempo de entrega fue de {df_rep['tiempo_entrega'].min():.0f} minutos."
+    # 1. Preparar la consulta y limpiar los datos para el prompt
     
-    # 2. Preguntas sobre Condiciones
-    if "clima" in query_lower and "afecta" in query_lower:
-        if 'clima' in df.columns and 'tiempo_entrega' in df.columns:
-            df['tiempo_entrega'] = pd.to_numeric(df['tiempo_entrega'], errors='coerce')
-            avg_by_clima = df.groupby('clima')['tiempo_entrega'].mean().sort_values(ascending=False)
-            
-            # Filtra solo los climas conocidos
-            avg_by_clima = avg_by_clima[avg_by_clima.index.str.lower().isin(CLIMA)].dropna()
-            
-            if not avg_by_clima.empty:
-                peor_clima = avg_by_clima.index[0]
-                tiempo_peor = avg_by_clima.iloc[0]
-                return f"Sí, el clima afecta. El promedio de entrega es más alto ({tiempo_peor:.1f} minutos) durante condiciones **{peor_clima.capitalize()}**, lo que sugiere la mayor dificultad."
-
-    # 3. Preguntas sobre Ubicaciones
-    if "ubicacion mas lenta" in query_lower or "peor zona" in query_lower:
-        if 'nombre' in df.columns and 'tiempo_entrega' in df.columns:
-            df['tiempo_entrega'] = pd.to_numeric(df['tiempo_entrega'], errors='coerce')
-            avg_by_ubicacion = df.groupby('nombre')['tiempo_entrega'].mean().sort_values(ascending=False)
-            peor_ubicacion = avg_by_ubicacion.index[0]
-            tiempo_peor = avg_by_ubicacion.iloc[0]
-            return f"La ubicación con el tiempo de entrega promedio más alto es **{peor_ubicacion}** con **{tiempo_peor:.1f} minutos**."
+    # Usamos una muestra de 100 registros para no sobrecargar la API.
+    # Se recomienda que esta muestra sea representativa.
+    df_sample = df_input.sample(min(100, len(df_input)), random_state=42) 
     
-    # Respuesta por defecto
-    return "Mi análisis indica que la información solicitada no está en una métrica predefinida. Por favor, reformula tu pregunta (ej: 'retraso promedio de Mario') o revisa los gráficos detallados en la sección KPI."
+    # Seleccionar columnas clave para el análisis
+    cols_to_analyze = ['repartidor', 'tiempo_entrega', 'retraso', 'clima', 'trafico', 'departamento', 'tipo_pedido']
+    
+    # Asegurar que las columnas existan antes de seleccionarlas
+    valid_cols = [col for col in cols_to_analyze if col in df_sample.columns]
+    df_sample_context = df_sample[valid_cols]
+    
+    # Convertir el DataFrame relevante a formato de texto para la IA
+    data_context = df_sample_context.to_markdown(index=False)
+    
+    # 2. Construir el Prompt Estructurado
+    system_instruction = (
+        "Eres un Agente de Análisis Logístico experto llamado ChivoBot. Tu función es analizar el desempeño "
+        "de las entregas basándote SÓLO en la tabla de datos que se te proporciona y responder directamente la pregunta del usuario. "
+        "Calcula promedios, máximos o mínimos y sé conciso. Si no encuentras la respuesta en los datos de la muestra, "
+        "indica que la información no es concluyente o no está disponible en la muestra actual."
+    )
+    
+    prompt = f"""
+    --- CONTEXTO DE DATOS DE ENTREGAS (Muestra Aleatoria) ---
+    {data_context}
+    --- FIN DE CONTEXTO ---
+    
+    Basado en el contexto de la tabla y tu rol como Agente Logístico:
+    PREGUNTA DEL USUARIO: {query}
+    """
+    
+    try:
+        # 3. Enviar la solicitud a Gemini
+        response = client.models.generate_content(
+            model='gemini-2.5-flash', # Modelo rápido
+            contents=prompt,
+            config={"system_instruction": system_instruction}
+        )
+        
+        return response.text
+        
+    except Exception as e:
+        return f"❌ Error de API: No se pudo conectar o procesar la solicitud. Detalle: {e}"
 
 # -----------------------------
 # Sidebar
@@ -234,31 +243,37 @@ if selected == "Ver Datos":
     st.markdown("Sube tus CSV. El sistema normaliza y cachea lecturas pesadas.")
 
     col1, col2 = st.columns(2)
+    # --- Clientes ---
     with col1:
         st.subheader("Clientes (CSV)")
         clientes_file = st.file_uploader("Sube archivo de CLIENTES", type=['csv'], key='upl_clientes')
-        if clientes_file is None and os.path.exists(SAMPLE_CLIENTES):
+        if clientes_file is not None and os.path.exists(SAMPLE_CLIENTES): # Check if the sample path is needed
             if st.button('Cargar ejemplo de clientes'):
-                clientes_file = SAMPLE_CLIENTES
+                 clientes_file = SAMPLE_CLIENTES # In reality, you'd load the sample file content here if the uploader is None
+                 st.info("Cargando archivo de ejemplo. Por favor, haz clic en 'Guardar clientes en BD'.")
+
         if clientes_file:
-            df_clientes = read_csv_cached(clientes_file)
-            if df_clientes is None:
+            df_clients = read_csv_cached(clientes_file)
+            if df_clients is None:
                 st.error("No se pudo leer el CSV de clientes.")
             else:
-                df_clientes = normalize_columns_df(df_clientes)
+                df_clients = normalize_columns_df(df_clients)
                 st.success("Clientes leídos (vista previa):")
-                st.dataframe(df_clientes.head(200))
+                st.dataframe(df_clients.head(200))
                 if st.button('Guardar clientes en BD'):
                     with engine.connect() as conn:
-                        df_clientes.to_sql('clientes', conn, if_exists='replace', index=False)
+                        df_clients.to_sql('clientes', conn, if_exists='replace', index=False)
                     st.success("Clientes guardados en BD.")
                     st.cache_data.clear()
+    # --- Ubicaciones ---
     with col2:
         st.subheader("Ubicaciones (CSV)")
         ubic_file = st.file_uploader("Sube archivo de UBICACIONES", type=['csv'], key='upl_ubic')
-        if ubic_file is None and os.path.exists(SAMPLE_UBIC):
+        if ubic_file is not None and os.path.exists(SAMPLE_UBIC):
             if st.button('Cargar ejemplo de ubicaciones'):
                 ubic_file = SAMPLE_UBIC
+                st.info("Cargando archivo de ejemplo. Por favor, haz clic en 'Guardar ubicaciones en BD'.")
+                
         if ubic_file:
             df_ubic = read_csv_cached(ubic_file)
             if df_ubic is None:
@@ -624,7 +639,7 @@ elif selected == "Seguimiento":
                 # --- TIME/PROGRESS CALCULATION ---
                 try:
                     inicio_ruta_str = str(row.get('inicio_ruta'))
-                    if inicio_ruta_str == 'None':
+                    if inicio_ruta_str == 'None' or inicio_ruta_str == 'nan':
                         st.info(f"🔴 Orden {row.get('orden_gestion')} no iniciada: Falta hora de inicio.")
                         continue
 
@@ -660,12 +675,12 @@ elif selected == "Seguimiento":
                      continue
 
                 # --- COORDINATE LOGIC ---
-                # Prioritize merged coordinates (lat_ubic/lon_ubic) if available, fallback to lat_ent/lon_ent
+                # Get the destination coordinates, prioritizing the merged column
                 lat_dest = row.get('lat_ubic') if 'lat_ubic' in row and not pd.isna(row.get('lat_ubic')) else row.get('lat')
                 lon_dest = row.get('lon_ubic') if 'lon_ubic' in row and not pd.isna(row.get('lon_ubic')) else row.get('lon')
 
-                # Using San Salvador (approximate center) as default fallback
-                origin_coords = [13.70, -89.20] # Placeholder for warehouse/starting point
+                # Using San Salvador (approximate center) as default fallback for origin
+                origin_coords = [13.70, -89.20] 
                 dest_coords = [lat_dest, lon_dest]
                 
                 if pd.isna(lat_dest) or pd.isna(lon_dest):
@@ -673,7 +688,7 @@ elif selected == "Seguimiento":
                 
                 # --- Rendering ---
                 st.markdown(f"### Orden #{row.get('orden_gestion')} ({row.get('repartidor')})")
-                c1, c2, c3, c4 = st.columns([1, 2, 2, 1.5])
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("ESTADO RUTA", estado_progreso)
                 c2.metric("DESTINO", row.get('nombre', 'N/A'))
                 c3.metric("TIEMPO RESTANTE", tiempo_restante_str)
@@ -687,6 +702,7 @@ elif selected == "Seguimiento":
                     with col_progreso:
                         st.markdown(f"**Progreso ({int(progreso * 100)}% completado)**")
                         st.progress(progreso)
+                        
                         st.markdown(f"**Estimado Total:** {int(tiempo_predicho_min)} min")
                         st.markdown(f"**Condiciones:** {row.get('clima','N/A')} | {row.get('trafico','N/A')}")
                         st.markdown(f"**Cliente:** {row.get('nombre','N/A')}")
@@ -701,7 +717,6 @@ elif selected == "Seguimiento":
 
                     with col_mapa:
                         if dest_coords:
-                            # Use default origin since the table lacks a specific 'origen' column
                             m = folium.Map(location=[(origin_coords[0] + dest_coords[0])/2, (origin_coords[1] + dest_coords[1])/2], zoom_start=12, tiles="CartoDB Positron")
                             folium.Marker(origin_coords, popup="Origen", icon=folium.Icon(color="green", icon="play")).add_to(m)
                             folium.Marker(dest_coords, popup=f"Destino: {row.get('nombre','N/A')}", icon=folium.Icon(color="red", icon="flag")).add_to(m)
@@ -717,8 +732,8 @@ elif selected == "Seguimiento":
 # Agente IA (new section)
 # -----------------------------
 elif selected == "Agente IA":
-    st.header("💬 Agente de Análisis IA")
-    st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega.")
+    st.header("💬 Agente de Análisis IA (ChivoBot - Conectado a Gemini)")
+    st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega. El análisis se realiza usando el modelo **Gemini 2.5 Flash** sobre una muestra de tus datos.")
     
     df_ent = load_table('entregas')
 
@@ -734,15 +749,14 @@ elif selected == "Agente IA":
     
     if st.button("Obtener Respuesta IA"):
         if user_query:
-            with st.spinner("Analizando datos..."):
-                # Llamar a la función de análisis
-                ai_response = run_ai_analysis(df, user_query)
+            with st.spinner("Conectando con Gemini y analizando datos..."):
+                # Llamar a la función de análisis de Gemini
+                ai_response = run_ai_analysis_gemini(df, user_query)
                 
-                st.success("🤖 Respuesta del Agente IA:")
+                st.success("🤖 Respuesta de ChivoBot:")
                 st.markdown(ai_response)
         else:
             st.error("Por favor, escribe una pregunta para el análisis.")
-
 
 # -----------------------------
 # Borrar datos
