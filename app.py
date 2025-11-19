@@ -1,3 +1,4 @@
+# app.py - ChivoFast Dashboard (versión corregida y robusta)
 import os
 import streamlit as st
 import pandas as pd
@@ -5,45 +6,43 @@ from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
 from streamlit_folium import st_folium
-from folium.plugins import HeatMap, AntPath
+from folium.plugins import HeatMap, MarkerCluster
 from streamlit_option_menu import option_menu
 import random
 from io import StringIO
 import re
 from datetime import datetime
-import time
 import numpy as np
 import math
 
-# Paths to uploaded sample files (if user uploaded them in this environment)
-SAMPLE_CLIENTES = "/mnt/data/datos_entregas_15000_COLAB (1).csv"
+# ----------------------------
+# Rutas a archivos de ejemplo (subidos en /mnt/data)
+# AÑADE AQUÍ TU ARCHIVO SUBIDO (se usa si no subes otro)
+SAMPLE_CLIENTES = "/mnt/data/reporte_pedidos_entregados_colab.csv"
 SAMPLE_UBIC = "/mnt/data/ubicaciones_unicas_colab (1).csv"
+# ----------------------------
 
 # ===============================
-# 🔗 Conexión a la base de datos (SQLite por defecto para portabilidad)
-# ===================================================
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite:///chivofast_local.db"
-)
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith('sqlite') else {})
+# DB: por defecto SQLite para portabilidad
+# Si quieres usar Postgres, configura DATABASE_URL en env.
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
-# Lista de repartidores disponibles (para simulación)
+# Lista de repartidores (simulación/por defecto)
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
-# Configuración de página
+# Página
 st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
-st.title("📦 ChivoFast — Dashboard Logístico (Corregido)")
+st.title("📦 ChivoFast — Dashboard Logístico (Stable)")
 
 # -----------------------------
-# Utilidades de lectura y normalización
+# UTILIDADES
 # -----------------------------
-
 def read_uploaded_csv_with_encoding(uploaded_file, delimiter=','):
     encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
     for enc in encodings:
         try:
-            if hasattr(uploaded_file, 'getvalue'):
+            if hasattr(uploaded_file, "getvalue"):
                 content = uploaded_file.getvalue().decode(enc)
                 df = pd.read_csv(StringIO(content), sep=delimiter, engine='python')
             else:
@@ -54,7 +53,6 @@ def read_uploaded_csv_with_encoding(uploaded_file, delimiter=','):
     st.error("❌ Error: No se pudo leer el archivo. Revisa la codificación y el delimitador.")
     return None
 
-
 def normalize_columns(df):
     df = df.copy()
     col_map = {}
@@ -64,37 +62,42 @@ def normalize_columns(df):
         c = re.sub(r'[^a-z0-9_]', '_', c)
         c = re.sub(r'_+', '_', c).strip('_')
         col_map[col] = c
-    df.rename(columns=col_map, inplace=True)
-
-    # map common names to standards
+    df = df.rename(columns=col_map)
+    # map common names to standard
     rename_map = {
-        'ubicacion': 'nombre', 'ubicacion_': 'nombre', 'ubicaciones': 'nombre', 'ubicacion_nombre': 'nombre',
-        'nombre_cliente': 'nombre', 'cliente': 'nombre', 'cliente_nombre': 'nombre',
-        'latitud': 'lat', 'lat': 'lat', 'latitude': 'lat', 'y': 'lat',
-        'longitud': 'lon', 'long': 'lon', 'lng': 'lon', 'longitude': 'lon', 'x': 'lon'
+        'ubicacion': 'nombre','ubicaciones':'nombre','ubicacion_nombre':'nombre','cliente':'nombre','nombre_cliente':'nombre',
+        'latitud':'lat','latitude':'lat','y':'lat',
+        'longitud':'lon','longitude':'lon','lng':'lon','x':'lon','long':'lon'
     }
     for k,v in rename_map.items():
         if k in df.columns and v not in df.columns:
-            df.rename(columns={k:v}, inplace=True)
-
+            df = df.rename(columns={k:v})
     return df
 
-
 def haversine(lat1, lon1, lat2, lon2):
-    # robust Haversine with NaN handling
     try:
         if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
             return np.nan
         R = 6371.0
-        phi1 = math.radians(float(lat1))
-        phi2 = math.radians(float(lat2))
-        dphi = math.radians(float(lat2) - float(lat1))
-        dlambda = math.radians(float(lon2) - float(lon1))
+        phi1 = math.radians(float(lat1)); phi2 = math.radians(float(lat2))
+        dphi = math.radians(float(lat2)-float(lat1)); dlambda = math.radians(float(lon2)-float(lon1))
         a = math.sin(dphi/2.0)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2.0)**2
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     except Exception:
         return np.nan
 
+@st.cache_data(ttl=300)
+def check_table_exists_local(name):
+    try:
+        with engine.connect() as conn:
+            if DATABASE_URL.startswith('sqlite'):
+                res = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}';"))
+                return len(res.fetchall()) > 0
+            else:
+                res = conn.execute(text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{name}')"))
+                return res.scalar()
+    except Exception:
+        return False
 
 @st.cache_data(ttl=300)
 def load_table(name):
@@ -108,39 +111,30 @@ def load_table(name):
             return pd.DataFrame()
     return pd.DataFrame()
 
-
-def check_table_exists_local(name):
-    try:
-        with engine.connect() as conn:
-            if DATABASE_URL.startswith('sqlite'):
-                res = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}';"))
-                return len(res.fetchall())>0
-            else:
-                res = conn.execute(text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{name}')"))
-                return res.scalar()
-    except Exception:
-        return False
-
-
 def clear_table(name):
     with engine.connect() as conn:
         conn.execute(text(f"DELETE FROM {name}"))
         conn.commit()
 
-
 def get_next_gestion_number(df):
     if 'orden_gestion' in df.columns and not df.empty:
         try:
-            max_gestion = pd.to_numeric(df['orden_gestion'], errors='coerce').max()
-            if pd.isna(max_gestion):
+            max_g = pd.to_numeric(df['orden_gestion'], errors='coerce').max()
+            if pd.isna(max_g):
                 return 1
-            return int(max_gestion) + 1
+            return int(max_g) + 1
         except Exception:
-            return len(df)+1
+            return len(df) + 1
     return 1
 
+def find_col(df, possibles):
+    for p in possibles:
+        if p in df.columns:
+            return p
+    return None
+
 # -----------------------------
-# Sidebar menu
+# SIDEBAR MENU
 # -----------------------------
 with st.sidebar:
     selected = option_menu(
@@ -152,7 +146,7 @@ with st.sidebar:
     )
 
 # -----------------------------
-# VER DATOS: Subir archivos y cargar a BD (soporta archivos grandes)
+# VER DATOS
 # -----------------------------
 if selected == "Ver Datos":
     st.header("📋 Gestionar datos — Subir archivos (clientes, ubicaciones, pedidos)")
@@ -169,7 +163,6 @@ if selected == "Ver Datos":
             df_clientes = read_uploaded_csv_with_encoding(clientes_file)
             if df_clientes is not None:
                 df_clientes = normalize_columns(df_clientes)
-                # force basic columns
                 if 'lat' not in df_clientes.columns or 'lon' not in df_clientes.columns or 'nombre' not in df_clientes.columns:
                     st.warning("Se han normalizado nombres de columnas. Asegúrate de que existan lat/lon/nombre. Revise la vista previa.")
                 st.dataframe(df_clientes.head(200))
@@ -213,7 +206,7 @@ if selected == "Ver Datos":
                 st.cache_data.clear()
 
 # -----------------------------
-# CLIENTES: visualizar y filtrar
+# CLIENTES
 # -----------------------------
 elif selected == "Clientes":
     st.header('👥 Clientes — Vista y filtros')
@@ -230,7 +223,9 @@ elif selected == "Clientes":
         st.dataframe(dfc, use_container_width=True)
 
         st.subheader('Filtros')
-        cols = st.multiselect('Columnas a mostrar', options=list(dfc.columns), default=['nombre','ruta','lat','lon'] if set(['nombre','ruta','lat','lon']).issubset(dfc.columns) else list(dfc.columns)[:6])
+        default_cols = ['nombre','ruta','lat','lon']
+        default = default_cols if set(default_cols).issubset(dfc.columns) else list(dfc.columns)[:6]
+        cols = st.multiselect('Columnas a mostrar', options=list(dfc.columns), default=default)
         ruta_f = st.multiselect('Filtrar por ruta', options=sorted(dfc['ruta'].unique()) if 'ruta' in dfc.columns else [])
         estado_f = st.multiselect('Filtrar por estado', options=sorted(dfc['estado'].unique()) if 'estado' in dfc.columns else [])
 
@@ -240,87 +235,121 @@ elif selected == "Clientes":
 
         st.dataframe(filtered[cols], use_container_width=True)
 
-# ================================
-# 🔥 MAPA HÍBRIDO (Reemplaza actual)
-# ================================
+# -----------------------------
+# MAPA (reemplazado por mapa híbrido)
+# -----------------------------
+elif selected == "Mapa":
+    st.header('🗺️ Mapa Híbrido — Heatmap + Burbujas + Marcadores + Cluster')
+    df_ubic = load_table('ubicaciones')
+    df_clients = load_table('clientes')
 
-st.subheader("🗺️ Mapa Híbrido de Entregas (Heatmap + Burbujas + Marcadores + Clúster)")
+    # elegir el dataset base para coordenadas
+    if df_clients.empty and df_ubic.empty:
+        st.info('No hay datos de ubicaciones o clientes. Sube archivos en "Ver Datos".')
+    else:
+        if not df_clients.empty:
+            dfc = normalize_columns(df_clients.copy())
+        else:
+            dfc = normalize_columns(df_ubic.copy())
 
-from folium.plugins import MarkerCluster, HeatMap
+        dfc['lat'] = pd.to_numeric(dfc.get('lat'), errors='coerce')
+        dfc['lon'] = pd.to_numeric(dfc.get('lon'), errors='coerce')
+        dfc = dfc.dropna(subset=['lat','lon']).reset_index(drop=True)
+        if dfc.empty:
+            st.warning("No hay coordenadas válidas en clientes/ubicaciones.")
+        else:
+            # Cargar entregas para contar frecuencias por ubicación
+            df_ent = load_table('entregas')
+            if df_ent.empty:
+                st.info('No hay entregas registradas (tabla entregas vacía).')
+                # mostrar solo marcadores desde dfc
+                m = folium.Map(location=[dfc['lat'].mean(), dfc['lon'].mean()], zoom_start=10, tiles="CartoDB Positron")
+                for _, r in dfc.iterrows():
+                    folium.CircleMarker(location=[r['lat'], r['lon']], radius=3, tooltip=str(r.get('nombre','')), color="blue", fill=True).add_to(m)
+                st_folium(m, width=1000, height=600)
+            else:
+                # Normalizar entregas
+                df_ent = normalize_columns(df_ent.copy())
 
-# Crear mapa base centrado en promedio de coordenadas
-m = folium.Map(
-    location=[merged['lat'].mean(), merged['lon'].mean()],
-    zoom_start=12,
-    tiles="CartoDB Positron"  # limpio y profesional
-)
+                # detectar columna que identifica ubicación en entregas
+                possible_cols = ['ubicacion','nombre','cliente','nombre_cliente','direccion']
+                col_ubic = next((c for c in possible_cols if c in df_ent.columns), None)
 
-# --------------------------------------------------
-# 1) 🔥 HEATMAP MULTICOLOR
-# --------------------------------------------------
+                if col_ubic is None:
+                    st.warning("No se encontró una columna clara de ubicación en la tabla 'entregas'. Mostraré marcadores base.")
+                    m = folium.Map(location=[dfc['lat'].mean(), dfc['lon'].mean()], zoom_start=10, tiles="CartoDB Positron")
+                    for _, r in dfc.iterrows():
+                        folium.CircleMarker(location=[r['lat'], r['lon']], radius=3, tooltip=str(r.get('nombre','')), color="blue", fill=True).add_to(m)
+                    st_folium(m, width=1000, height=600)
+                else:
+                    counts = df_ent.groupby(col_ubic).size().reset_index(name='freq')
 
-HeatMap(
-    merged[['lat', 'lon', 'freq']].values.tolist(),
-    radius=22,
-    blur=30,
-    min_opacity=0.25,
-    gradient={
-        0.1: 'purple',
-        0.3: 'blue',
-        0.5: 'cyan',
-        0.7: 'lime',
-        0.9: 'yellow',
-        1.0: 'red'
-    }
-).add_to(m)
+                    # unir counts con dfc (join left_on=col_ubic, right_on='nombre')
+                    if 'nombre' in dfc.columns:
+                        merged = pd.merge(counts, dfc, left_on=col_ubic, right_on='nombre', how='inner')
+                    else:
+                        # si no hay 'nombre' en dfc, intentar unir por lat/lon si entregas tienen lat/lon
+                        merged = pd.DataFrame()
+                        if 'lat' in df_ent.columns and 'lon' in df_ent.columns:
+                            # agregar frecuencias por coordenadas aproximadas (agrupando por rounded coords)
+                            tmp = df_ent.copy()
+                            tmp['lat_r'] = tmp['lat'].round(4)
+                            tmp['lon_r'] = tmp['lon'].round(4)
+                            coords_counts = tmp.groupby(['lat_r','lon_r']).size().reset_index(name='freq')
+                            # merge with dfc rounded coords
+                            dfc['lat_r'] = dfc['lat'].round(4); dfc['lon_r'] = dfc['lon'].round(4)
+                            merged = pd.merge(coords_counts, dfc, left_on=['lat_r','lon_r'], right_on=['lat_r','lon_r'], how='inner')
 
-# --------------------------------------------------
-# 2) 🟦 CÍRCULOS PROPORCIONALES (BUBBLE MAP)
-# --------------------------------------------------
+                    # verificar columnas necesarias
+                    if not merged.empty and {'lat','lon','freq'}.issubset(merged.columns):
+                        # crear mapa híbrido
+                        m = folium.Map(location=[merged['lat'].mean(), merged['lon'].mean()], zoom_start=11, tiles="CartoDB Positron")
 
-for _, row in merged.iterrows():
-    folium.Circle(
-        location=[row['lat'], row['lon']],
-        radius=row['freq'] * 12,
-        color="blue",
-        fill=True,
-        fill_color="blue",
-        fill_opacity=0.25,
-        popup=f"{row[col_ubic]}: {row['freq']} entregas",
-    ).add_to(m)
+                        # 1) HeatMap multicolor
+                        HeatMap(
+                            merged[['lat','lon','freq']].values.tolist(),
+                            radius=22,
+                            blur=30,
+                            min_opacity=0.20,
+                            gradient={0.1:'purple',0.3:'blue',0.5:'cyan',0.7:'lime',0.9:'yellow',1.0:'red'}
+                        ).add_to(m)
 
-# --------------------------------------------------
-# 3) 📌 CLÚSTER DE MARCADORES
-# --------------------------------------------------
+                        # 2) Circulos proporcionales
+                        for _, row in merged.iterrows():
+                            folium.Circle(
+                                location=[row['lat'], row['lon']],
+                                radius=max(8, row['freq'] * 10),
+                                color="blue",
+                                fill=True,
+                                fill_color="blue",
+                                fill_opacity=0.25,
+                                popup=f"{row.get(col_ubic, row.get('nombre',''))}: {int(row['freq'])} entregas"
+                            ).add_to(m)
 
-cluster = MarkerCluster().add_to(m)
+                        # 3) MarkerCluster + marcadores detallados
+                        cluster = MarkerCluster().add_to(m)
+                        for _, row in merged.iterrows():
+                            folium.Marker(
+                                location=[row['lat'], row['lon']],
+                                popup=f"<b>{row.get(col_ubic, row.get('nombre',''))}</b><br>Entregas: {int(row['freq'])}",
+                                icon=folium.Icon(color="blue", icon="info-sign")
+                            ).add_to(cluster)
 
-# --------------------------------------------------
-# 4) 📍 MARCADORES INDIVIDUALES
-# --------------------------------------------------
-
-for _, row in merged.iterrows():
-    folium.Marker(
-        location=[row['lat'], row['lon']],
-        popup=f"""
-        <b>Ubicación:</b> {row[col_ubic]}<br>
-        <b>Entregas:</b> {row['freq']}
-        """,
-        icon=folium.Icon(color="blue", icon="info-sign")
-    ).add_to(cluster)
-
-# Mostrar mapa en Streamlit
-st_folium(m, width=950, height=550)
-
+                        st_folium(m, width=1000, height=650)
+                    else:
+                        st.warning("No se pudieron generar capas avanzadas porque la unión de entregas y ubicaciones no produjo lat/lon/freq.")
+                        # fallback: mostrar marcadores desde dfc
+                        m = folium.Map(location=[dfc['lat'].mean(), dfc['lon'].mean()], zoom_start=10, tiles="CartoDB Positron")
+                        for _, r in dfc.iterrows():
+                            folium.CircleMarker(location=[r['lat'], r['lon']], radius=3, tooltip=str(r.get('nombre','')), color="blue", fill=True).add_to(m)
+                        st_folium(m, width=1000, height=600)
 
 # -----------------------------
-# PEDIDOS: ver y crear
+# PEDIDOS
 # -----------------------------
 elif selected == "Pedidos":
     st.header('📦 Pedidos — Crear y administrar')
     df_ent = load_table('entregas')
-    df_clients = load_table('clientes')
-
     st.subheader('📄 Pedidos existentes')
     if df_ent.empty:
         st.info('No hay pedidos en la tabla entregas. Puedes cargarlos en "Ver Datos" o crear nuevos aquí.')
@@ -363,7 +392,7 @@ elif selected == "Pedidos":
             st.error(f'Error al crear pedido: {e}')
 
 # -----------------------------
-# ASIGNACIÓN: asignar repartidores a pedidos
+# ASIGNACIÓN
 # -----------------------------
 elif selected == "Asignación":
     st.header('🚚 Asignación de repartidores')
@@ -373,7 +402,8 @@ elif selected == "Asignación":
     else:
         pendientes = df_ent[df_ent.get('estado','').str.lower().isin(['pendiente','pendiente ' , 'pendiente'])]
         st.subheader('Pedidos pendientes')
-        st.dataframe(pendientes[['orden_gestion','nombre','municipio','departamento']].head(200), use_container_width=True)
+        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento'] if c in pendientes.columns]
+        st.dataframe(pendientes[cols_show].head(200), use_container_width=True)
 
         sel_ord = st.selectbox('Seleccionar orden', options=pendientes['orden_gestion'].tolist() if not pendientes.empty else [])
         sel_rep = st.selectbox('Seleccionar repartidor', options=REPARTIDORES)
@@ -388,56 +418,61 @@ elif selected == "Asignación":
                 st.error(f'Error asignando repartidor: {e}')
 
 # -----------------------------
-# KPIs: todas las métricas solicitadas
+# KPIs (REESCRITOS ROBUSTOS)
 # -----------------------------
 elif selected == "KPIs":
     st.header('📊 KPIs completos')
     df_ent = load_table('entregas')
     df_clients = load_table('clientes')
     df = df_clients if not df_clients.empty else df_ent
+
     if df.empty:
         st.info('No hay datos para calcular KPIs')
     else:
         df = normalize_columns(df.copy())
-        total_clientes = len(df)
-        total_rutas = df['ruta'].nunique() if 'ruta' in df.columns else 0
-        atendidos = df[df.get('estado','').str.lower().isin(['entregado','atendido'])].shape[0] if 'estado' in df.columns else 0
-        pendientes = total_clientes - atendidos
 
-        # tiempo promedio si existen columnas
+        # detectar columnas útiles
+        col_nombre = find_col(df, ['nombre','ubicacion','cliente','direccion','cliente_nombre'])
+        col_lat = find_col(df, ['lat','latitud','latitude'])
+        col_lon = find_col(df, ['lon','longitud','longitude','lng'])
+        col_ruta = find_col(df, ['ruta','route','ruta_asignada'])
+        col_estado = find_col(df, ['estado','status'])
+        col_orden = find_col(df, ['orden_gestion','orden','id','order_id'])
+        col_dist = find_col(df, ['dist_km','distancia','km','distance'])
+
+        total_clientes = len(df)
+        total_rutas = df[col_ruta].nunique() if col_ruta and col_ruta in df.columns else 0
+        atendidos = df[df.get(col_estado,'').astype(str).str.lower().isin(['entregado','atendido'])].shape[0] if col_estado else 0
+
+        # tiempo promedio (si existen)
+        tiempo_promedio = 'No disponible'
         if 'hora_inicio' in df.columns and 'hora_fin' in df.columns:
             try:
-                df['hora_inicio'] = pd.to_datetime(df['hora_inicio'])
-                df['hora_fin'] = pd.to_datetime(df['hora_fin'])
+                df['hora_inicio'] = pd.to_datetime(df['hora_inicio']); df['hora_fin'] = pd.to_datetime(df['hora_fin'])
                 df['dur_min'] = (df['hora_fin'] - df['hora_inicio']).dt.total_seconds()/60
                 tiempo_promedio = round(df['dur_min'].mean(),2)
             except Exception:
                 tiempo_promedio = 'No disponible'
-        else:
-            tiempo_promedio = 'No disponible'
 
-        # distancias (el usuario indicó que siempre hay lat/lon)
-        if 'lat' in df.columns and 'lon' in df.columns:
-            # convertir a num
-            df['lat'] = pd.to_numeric(df['lat'], errors='coerce')
-            df['lon'] = pd.to_numeric(df['lon'], errors='coerce')
-            # eliminar filas sin coordenadas
-            df = df.dropna(subset=['lat','lon']).reset_index(drop=True)
-            base_lat = df['lat'].mean()
-            base_lon = df['lon'].mean()
-            # calcular distancias
-            df['dist_km'] = df.apply(lambda r: haversine(base_lat, base_lon, r['lat'], r['lon']), axis=1)
+        # si lat/lon existen calculamos distancias al centro
+        distancia_total = distancia_prom = cliente_mas_lejano = cliente_mas_cercano = 'No disponible'
+        if col_lat and col_lon and col_lat in df.columns and col_lon in df.columns:
+            df[col_lat] = pd.to_numeric(df[col_lat], errors='coerce')
+            df[col_lon] = pd.to_numeric(df[col_lon], errors='coerce')
+            df = df.dropna(subset=[col_lat, col_lon]).reset_index(drop=True)
+            base_lat = df[col_lat].mean(); base_lon = df[col_lon].mean()
+            df['dist_km'] = df.apply(lambda r: haversine(base_lat, base_lon, r[col_lat], r[col_lon]), axis=1)
             distancia_total = round(df['dist_km'].sum(),2)
             distancia_prom = round(df['dist_km'].mean(),2)
-            # defensivo: asegurar que existan filas
             if len(df) > 0:
-                cliente_mas_lejano = df.sort_values(by='dist_km', ascending=False).iloc[0][['nombre','dist_km']].to_dict() if 'nombre' in df.columns else {'nombre': 'N/A', 'dist_km': df['dist_km'].max()}
-                cliente_mas_cercano = df.sort_values(by='dist_km', ascending=True).iloc[0][['nombre','dist_km']].to_dict() if 'nombre' in df.columns else {'nombre': 'N/A', 'dist_km': df['dist_km'].min()}
-            else:
-                cliente_mas_lejano = cliente_mas_cercano = {'nombre': 'N/A', 'dist_km': 0}
-        else:
-            distancia_total = distancia_prom = cliente_mas_lejano = cliente_mas_cercano = 'No disponible'
+                if col_nombre:
+                    cliente_mas_lejano = df.sort_values(by='dist_km', ascending=False).iloc[0][[col_nombre,'dist_km']].to_dict()
+                    cliente_mas_cercano = df.sort_values(by='dist_km', ascending=True).iloc[0][[col_nombre,'dist_km']].to_dict()
+                else:
+                    cliente_mas_lejano = {'nombre':'N/A','dist_km': float(df['dist_km'].max())}
+                    cliente_mas_cercano = {'nombre':'N/A','dist_km': float(df['dist_km'].min())}
 
+        # mostrar KPIs
         col1,col2,col3,col4 = st.columns(4)
         col1.metric('Total clientes', total_clientes)
         col2.metric('Total rutas', total_rutas)
@@ -450,29 +485,30 @@ elif selected == "KPIs":
         col7.metric('Dist prom por cliente (km)', distancia_prom)
 
         st.markdown('---')
+
+        # Clientes por ruta
         st.subheader('Clientes por ruta')
-        if 'ruta' in df.columns:
-            ruta_counts = df['ruta'].value_counts().reset_index()
+        if col_ruta and col_ruta in df.columns:
+            ruta_counts = df[col_ruta].value_counts().reset_index()
             ruta_counts.columns = ['ruta','clientes']
             fig = px.bar(ruta_counts, x='ruta', y='clientes')
             st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader('Ranking de clientes por distancia')
-        # FIX: comprobación segura antes de mostrar la tabla
-        cols_needed = [c for c in ['nombre','ruta','dist_km'] if c in df.columns]
-        if 'dist_km' not in df.columns:
-            st.warning('⚠️ No se pudo calcular distancias (faltan lat/lon).')
-        elif len(cols_needed) == 0:
-            st.warning('⚠️ No hay columnas disponibles para mostrar el ranking.')
         else:
-            # si 'ruta' no existe, mostramos solo nombre y dist_km
-            if 'ruta' not in df.columns:
-                st.dataframe(df[['nombre','dist_km']].sort_values(by='dist_km', ascending=False).head(50))
+            st.info('No hay columna de RUTA para mostrar clientes por ruta.')
+
+        # Ranking por distancia
+        st.subheader('Ranking de clientes por distancia')
+        if 'dist_km' in df.columns:
+            cols_to_show = [c for c in [col_nombre, 'dist_km', col_ruta] if c and c in df.columns]
+            if cols_to_show:
+                st.dataframe(df[cols_to_show].sort_values(by='dist_km', ascending=False).head(50))
             else:
-                st.dataframe(df[['nombre','ruta','dist_km']].sort_values(by='dist_km', ascending=False).head(50))
+                st.warning('No hay columnas disponibles para mostrar ranking.')
+        else:
+            st.info('No se calculó dist_km (faltan lat/lon en los datos).')
 
 # -----------------------------
-# Seguimiento: listado de rutas activas + mini-mapas
+# SEGUIMIENTO
 # -----------------------------
 elif selected == "Seguimiento":
     st.header('🚨 Seguimiento por ruta (Activas)')
@@ -482,7 +518,7 @@ elif selected == "Seguimiento":
         st.info('No hay entregas registradas')
     else:
         df_ent = normalize_columns(df_ent.copy())
-        activos = df_ent[df_ent.get('estado','').str.lower().isin(['activa','en curso','enprogreso','en curso'])]
+        activos = df_ent[df_ent.get('estado','').astype(str).str.lower().isin(['activa','en curso','enprogreso','en curso'])]
         if activos.empty:
             st.info('No hay rutas activas')
         else:
@@ -512,28 +548,28 @@ elif selected == "Seguimiento":
                         else:
                             o = [row.get('lat') or 13.7, row.get('lon') or -89.2]
                         d = [row.get('lat'), row.get('lon')]
-                        m = folium.Map(location=[(o[0]+(d[0] or o[0]))/2,(o[1]+(d[1] or o[1]))/2], zoom_start=12)
-                        folium.Marker(o, popup='Origen').add_to(m)
-                        folium.Marker(d, popup='Destino').add_to(m)
-                        folium.PolyLine([o,d], color='blue', weight=4).add_to(m)
-                        st_folium(m, width=600, height=300)
+                        # mapa mini
+                        try:
+                            m = folium.Map(location=[(o[0]+(d[0] or o[0]))/2,(o[1]+(d[1] or o[1]))/2], zoom_start=12)
+                            folium.Marker(o, popup='Origen').add_to(m)
+                            folium.Marker(d, popup='Destino').add_to(m)
+                            folium.PolyLine([o,d], color='blue', weight=4).add_to(m)
+                            st_folium(m, width=600, height=300)
+                        except Exception:
+                            st.info("No hay coordenadas válidas para mostrar mini-mapa.")
 
 # -----------------------------
-# Borrar datos
+# BORRAR DATOS
 # -----------------------------
 elif selected == "Borrar Datos":
     st.header('🗑️ Borrar datos (Peligroso)')
     st.warning('Esto eliminará las tablas: clientes, ubicaciones, entregas')
     if st.button('Borrar TODO'):
         try:
-            clear_table('clientes')
-            clear_table('ubicaciones')
-            clear_table('entregas')
+            clear_table('clientes'); clear_table('ubicaciones'); clear_table('entregas')
             st.success('Tablas borradas')
             st.cache_data.clear()
         except Exception as e:
             st.error(f'Error: {e}')
 
-# ==============================
 # FIN
-# ==============================
