@@ -593,20 +593,7 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-                # Coordenadas para enlaces
-                # Asumimos que ubicaciones_df_cleaned ya tiene los nombres de columna correctos.
-                ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
-                if ubicaciones_df_cleaned is not None:
-                     
-                     # Conversión a numérico (Float) para asegurar que Folium pueda usarlas
-                     ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
-                     ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
-
-                     coordenadas = {
-                        loc['ubicacion']: [loc['latitud'], loc['longitud']]
-                        for _, loc in ubicaciones_df_cleaned.iterrows()
-                     }
-                
+              
                 origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
                 destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
 
