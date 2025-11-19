@@ -6,4 +6,5 @@ folium
 streamlit-folium
 sqlalchemy
 google-genai
-streamlit-option-menu 
+streamlit-option-menu
+tabulate  
