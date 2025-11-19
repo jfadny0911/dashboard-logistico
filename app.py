@@ -1,6 +1,8 @@
+# app.py - ChivoFast Dashboard (Optimized)
 import os
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
@@ -11,20 +13,20 @@ import random
 from io import StringIO
 import re
 from datetime import datetime, timedelta
-import time
-import numpy as np 
+import math
+from typing import Optional, Tuple
 from google import genai # Importación de la librería de Google GenAI
 
-# ===============================
-# 🔗 CLAVE API Y CONEXIÓN A LA BASE DE DATOS
-# ===================================================
-# --- CLAVE GEMINI (INTEGRADA DIRECTAMENTE) ---
-# NOTA: En un entorno de producción, esta clave DEBE estar en una variable de entorno.
-GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
+# ----------------------------
+# Config / sample file paths (AJUSTADO: RUTAS DE EJEMPLO ELIMINADAS)
+# ----------------------------
 
-# Base de datos (SQLite para portabilidad)
+# Database default (SQLite for portability)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
+
+# CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
+GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
 
 # Inicialización del Cliente Gemini
 client = None
@@ -33,13 +35,12 @@ if GEMINI_API_KEY:
         client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
         st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
+        client = None
 
-# Lista de repartidores disponibles (para simulación)
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
-# Configuración de página
-st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
-st.title("📦 Dashboard Predictivo - ChivoFast")
+st.set_page_config(page_title="ChivoFast — Optimized Dashboard", layout="wide")
+st.title("📦 ChivoFast — Dashboard (Optimized)")
 
 # -----------------------------
 # Utilities
@@ -74,17 +75,7 @@ def read_csv_cached(uploaded_file, delimiter=','):
     """
     encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
     
-    # Check if the input is a file path (string) or an uploaded file object
-    if isinstance(uploaded_file, str):
-        for enc in encodings:
-            try:
-                df = pd.read_csv(uploaded_file, encoding=enc, sep=delimiter)
-                return df
-            except Exception:
-                continue
-        return None
-
-    # Handle Streamlit uploaded file object
+    # Handle uploaded file object
     for enc in encodings:
         try:
             content = uploaded_file.getvalue().decode(enc)
@@ -93,7 +84,6 @@ def read_csv_cached(uploaded_file, delimiter=','):
         except Exception:
             continue
     return None
-
 
 @st.cache_data(ttl=300)
 def check_table_exists_local(name: str) -> bool:
@@ -180,7 +170,6 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     # 1. Preparar la consulta y limpiar los datos para el prompt
     
     # Usamos una muestra de 100 registros para no sobrecargar la API.
-    # Se recomienda que esta muestra sea representativa.
     df_sample = df_input.sample(min(100, len(df_input)), random_state=42) 
     
     # Seleccionar columnas clave para el análisis
@@ -247,11 +236,7 @@ if selected == "Ver Datos":
     with col1:
         st.subheader("Clientes (CSV)")
         clientes_file = st.file_uploader("Sube archivo de CLIENTES", type=['csv'], key='upl_clientes')
-        if clientes_file is not None and os.path.exists(SAMPLE_CLIENTES): # Check if the sample path is needed
-            if st.button('Cargar ejemplo de clientes'):
-                 clientes_file = SAMPLE_CLIENTES # In reality, you'd load the sample file content here if the uploader is None
-                 st.info("Cargando archivo de ejemplo. Por favor, haz clic en 'Guardar clientes en BD'.")
-
+        
         if clientes_file:
             df_clients = read_csv_cached(clientes_file)
             if df_clients is None:
@@ -269,10 +254,6 @@ if selected == "Ver Datos":
     with col2:
         st.subheader("Ubicaciones (CSV)")
         ubic_file = st.file_uploader("Sube archivo de UBICACIONES", type=['csv'], key='upl_ubic')
-        if ubic_file is not None and os.path.exists(SAMPLE_UBIC):
-            if st.button('Cargar ejemplo de ubicaciones'):
-                ubic_file = SAMPLE_UBIC
-                st.info("Cargando archivo de ejemplo. Por favor, haz clic en 'Guardar ubicaciones en BD'.")
                 
         if ubic_file:
             df_ubic = read_csv_cached(ubic_file)
@@ -692,7 +673,7 @@ elif selected == "Seguimiento":
                 c1.metric("ESTADO RUTA", estado_progreso)
                 c2.metric("DESTINO", row.get('nombre', 'N/A'))
                 c3.metric("TIEMPO RESTANTE", tiempo_restante_str)
-                c4.metric("INICIO", pd.to_datetime(row.get('inicio_ruta')).strftime('%H:%M:%S'))
+                c4.metric("INICIO", pd.to_datetime(row.get('inicio_ruta')).strftime('%H:%M:%S') if row.get('inicio_ruta') else 'N/A')
 
                 
                 with st.expander(f"Detalles de la Ruta {row.get('orden_gestion')}"):
