@@ -21,7 +21,7 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://chivofast_db_user:VOVsj9KYQdoI7vBjpdIpTG1jj2Bvj0GS@dpg-d34osnbe5dus739qotu0-a.oregon-postgres.render.com/chivofast_db"
 )
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE=URL)
 
 # Lista de repartidores disponibles (para simulación)
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
@@ -153,7 +153,7 @@ if menu == "Ver Datos":
                     # Verificar la existencia de la columna departamento antes de continuar
                     if 'departamento' not in df_to_load.columns:
                         st.error("Error crítico: La columna 'departamento' no fue encontrada después de la normalización. Revisa tu archivo CSV.")
-                        
+                        return
 
                     # Lógica estándar de verificación de columnas
                     if 'orden_gestion' not in df_to_load.columns:
@@ -406,7 +406,7 @@ elif menu == "Predicción de Rutas":
     if 'ubicaciones_df' in st.session_state and st.session_state['ubicaciones_df'] is not None:
         ubicaciones_df = st.session_state['ubicaciones_df'].copy()
         
-        # Normalización de nombres de columna (solo las que se cargan)
+        # Normalización de nombres de columna
         ubicaciones_df.columns = [
             re.sub(r'[^a-z0-9_]', '', col.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n').replace(' ', '_').strip())
             for col in ubicaciones_df.columns
@@ -417,7 +417,7 @@ elif menu == "Predicción de Rutas":
         if not all(col in ubicaciones_df.columns for col in col_map.values()):
             st.error("❌ Error: El archivo debe contener las columnas 'Ubicación', 'Latitud' y 'Longitud' (o sus equivalentes).")
         else:
-            # Conversión de coordenadas a numérico
+            # Conversión de coordenadas a numérico después de la limpieza de nombres:
             ubicaciones_df['latitud'] = pd.to_numeric(ubicaciones_df['latitud'], errors='coerce')
             ubicaciones_df['longitud'] = pd.to_numeric(ubicaciones_df['longitud'], errors='coerce')
 
@@ -533,7 +533,6 @@ elif menu == "Predicción de Rutas":
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
 # --- Sección para seguimiento de rutas ---
-# --- Sección para seguimiento de rutas ---
 elif menu == "Seguimiento de Rutas":
     st.header("🚚 Seguimiento de Rutas")
     
@@ -543,7 +542,6 @@ elif menu == "Seguimiento de Rutas":
     if not df_entregas.empty and ubicaciones_df is not None and not ubicaciones_df.empty:
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
-        # CORRECCIÓN DE KEYERROR: Se verifica si la columna existe antes de usarla
         if 'repartidor' not in ordenes_activas.columns:
             st.error("Error: La base de datos no tiene la columna 'repartidor'. Por favor, **borra y sube tus datos nuevamente** en la sección 'Ver Datos' para actualizar la estructura.")
             st.stop()
@@ -576,8 +574,14 @@ elif menu == "Seguimiento de Rutas":
                         inicio_ruta_dt = row['inicio_ruta']
                         
                 except Exception:
-                    inicio_ruta_dt = datetime.now() - timedelta(minutes=1) 
-
+                    # Esta lógica maneja el caso donde el inicio_ruta es None o inválido
+                    st.warning(f"La orden {row['orden_gestion']} está 'Activa' pero sin hora de inicio válida. No se puede calcular el progreso.")
+                    continue # Salta al siguiente elemento del bucle
+                    
+                # El error lógico de División por Cero o None debe ser manejado aquí
+                if row['tiempo_predicho'] is None or row['tiempo_predicho'] == 0:
+                    st.error(f"Error lógico: 'tiempo_predicho' es nulo o cero para la orden {row['orden_gestion']}. Imposible calcular progreso.")
+                    continue
 
                 tiempo_transcurrido = datetime.now() - inicio_ruta_dt
                 tiempo_restante_segundos = row['tiempo_predicho'] * 60 - tiempo_transcurrido.total_seconds()
@@ -595,9 +599,12 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-                # Coordenadas para enlaces (Se debe asegurar que el DF de ubicaciones se limpió en la sección de Predicciones)
+                # Coordenadas para enlaces
                 ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
                 if ubicaciones_df_cleaned is not None:
+                     
+                     # Conversión a numérico (Float) para asegurar que Folium pueda usarlas
+                     # Las columnas ya deben estar limpias de texto gracias al paso de Predicción de Rutas
                      ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
                      ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
 
