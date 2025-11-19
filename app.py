@@ -420,92 +420,104 @@ elif selected == "Asignación":
 # -----------------------------
 # KPIs (REESCRITOS ROBUSTOS)
 # -----------------------------
-elif selected == "KPIs":
-    st.header('📊 KPIs completos')
-    df_ent = load_table('entregas')
-    df_clients = load_table('clientes')
-    df = df_clients if not df_clients.empty else df_ent
+# --- 📈 KPIs y Dashboard estilo BI ---
+elif menu == "KPIs":
+    st.header("📈 Indicadores Clave (KPIs)")
+    df = load_data_from_db()
+    
+    if not df.empty:
+        # Verifica la existencia de columnas clave para evitar errores
+        if 'departamento' not in df.columns or 'municipio' not in df.columns or 'tipo_pedido' not in df.columns:
+            st.error("Error de datos: Faltan columnas clave ('departamento', 'municipio', 'tipo_pedido'). Por favor, asegúrate de que el CSV subido sea correcto y que el proceso de carga se haya completado sin errores.")
+            st.stop()
 
-    if df.empty:
-        st.info('No hay datos para calcular KPIs')
+        total_registros = len(df)
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📊 Total registros", total_registros)
+        
+        numeric_cols = df.select_dtypes(include="number").columns
+        if not numeric_cols.empty:
+            avg_global = round(df[numeric_cols].mean().mean(), 2)
+            max_global = round(df[numeric_cols].max().max(), 2)
+            col2.metric("🔹 Promedio global", avg_global)
+            col3.metric("📈 Máximo global", max_global)
+
+        st.subheader("Filtros para análisis detallado")
+        
+        # Filtro de Repartidor
+        col_select_repartidor = st.selectbox(
+            'Selecciona el Repartidor:',
+            options=['Todos'] + (sorted(df['repartidor'].unique()) if 'repartidor' in df.columns else [])
+        )
+
+        col_select_departamento, col_select_municipio, col_select_tipo_pedido = st.columns(3)
+        
+        with col_select_departamento:
+            selected_departamento = st.selectbox(
+                'Selecciona el Departamento:',
+                options=df['departamento'].unique()
+            )
+
+        with col_select_municipio:
+            municipios_disponibles = df[df['departamento'] == selected_departamento]['municipio'].unique()
+            selected_municipio = st.selectbox(
+                'Selecciona el Municipio:',
+                options=municipios_disponibles
+            )
+
+        with col_select_tipo_pedido:
+            tipo_pedido_disponibles = df['tipo_pedido'].unique()
+            selected_tipo_pedido = st.selectbox(
+                'Selecciona el Tipo de Pedido:',
+                options=tipo_pedido_disponibles
+            )
+
+        filtered_df = df[
+            (df['departamento'] == selected_departamento) &
+            (df['municipio'] == selected_municipio) &
+            (df['tipo_pedido'] == selected_tipo_pedido)
+        ]
+
+        if 'repartidor' in df.columns and col_select_repartidor != 'Todos':
+            filtered_df = filtered_df[filtered_df['repartidor'] == col_select_repartidor]
+
+        if not filtered_df.empty:
+            st.markdown("---")
+            st.subheader(f"Análisis para {selected_tipo_pedido} en {selected_municipio}, {selected_departamento}")
+            
+            fig_clima = px.box(filtered_df, x='clima', y='tiempo_entrega',
+                                 title='Tiempo de Entrega por Clima',
+                                 labels={'clima': 'Clima', 'tiempo_entrega': 'Tiempo de Entrega (min)'},
+                                 color='clima')
+            st.plotly_chart(fig_clima, use_container_width=True)
+
+            df_retraso_trafico = filtered_df.groupby('trafico')['retraso'].mean().reset_index()
+            fig_trafico = px.bar(df_retraso_trafico, x='trafico', y='retraso',
+                                 title='Retraso Promedio por Tráfico',
+                                 labels={'trafico': 'Nivel de Tráfico', 'retraso': 'Retraso Promedio (min)'},
+                                 color='trafico')
+            st.plotly_chart(fig_trafico, use_container_width=True)
+            
+            fig_distribucion = px.histogram(filtered_df, x='tiempo_entrega', nbins=20,
+                                             title='Distribución del Tiempo de Entrega',
+                                             labels={'tiempo_entrega': 'Tiempo de Entrega (min)'},
+                                             color='tipo_pedido')
+            st.plotly_chart(fig_distribucion, use_container_width=True)
+
+            if 'repartidor' in filtered_df.columns and len(filtered_df['repartidor'].unique()) > 1:
+                 df_repartidor = filtered_df.groupby('repartidor')['tiempo_entrega'].mean().reset_index()
+                 fig_repartidor = px.bar(df_repartidor, x='repartidor', y='tiempo_entrega',
+                                     title='Promedio de Tiempo de Entrega por Repartidor',
+                                     labels={'repartidor': 'Repartidor', 'tiempo_entrega': 'Tiempo Promedio (min)'},
+                                     color='repartidor')
+                 st.plotly_chart(fig_repartidor, use_container_width=True)
+
+
+        else:
+            st.warning("No hay datos para la combinación de filtros seleccionada.")
     else:
-        df = normalize_columns(df.copy())
-
-        # detectar columnas útiles
-        col_nombre = find_col(df, ['nombre','ubicacion','cliente','direccion','cliente_nombre'])
-        col_lat = find_col(df, ['lat','latitud','latitude'])
-        col_lon = find_col(df, ['lon','longitud','longitude','lng'])
-        col_ruta = find_col(df, ['ruta','route','ruta_asignada'])
-        col_estado = find_col(df, ['estado','status'])
-        col_orden = find_col(df, ['orden_gestion','orden','id','order_id'])
-        col_dist = find_col(df, ['dist_km','distancia','km','distance'])
-
-        total_clientes = len(df)
-        total_rutas = df[col_ruta].nunique() if col_ruta and col_ruta in df.columns else 0
-        atendidos = df[df.get(col_estado,'').astype(str).str.lower().isin(['entregado','atendido'])].shape[0] if col_estado else 0
-
-        # tiempo promedio (si existen)
-        tiempo_promedio = 'No disponible'
-        if 'hora_inicio' in df.columns and 'hora_fin' in df.columns:
-            try:
-                df['hora_inicio'] = pd.to_datetime(df['hora_inicio']); df['hora_fin'] = pd.to_datetime(df['hora_fin'])
-                df['dur_min'] = (df['hora_fin'] - df['hora_inicio']).dt.total_seconds()/60
-                tiempo_promedio = round(df['dur_min'].mean(),2)
-            except Exception:
-                tiempo_promedio = 'No disponible'
-
-        # si lat/lon existen calculamos distancias al centro
-        distancia_total = distancia_prom = cliente_mas_lejano = cliente_mas_cercano = 'No disponible'
-        if col_lat and col_lon and col_lat in df.columns and col_lon in df.columns:
-            df[col_lat] = pd.to_numeric(df[col_lat], errors='coerce')
-            df[col_lon] = pd.to_numeric(df[col_lon], errors='coerce')
-            df = df.dropna(subset=[col_lat, col_lon]).reset_index(drop=True)
-            base_lat = df[col_lat].mean(); base_lon = df[col_lon].mean()
-            df['dist_km'] = df.apply(lambda r: haversine(base_lat, base_lon, r[col_lat], r[col_lon]), axis=1)
-            distancia_total = round(df['dist_km'].sum(),2)
-            distancia_prom = round(df['dist_km'].mean(),2)
-            if len(df) > 0:
-                if col_nombre:
-                    cliente_mas_lejano = df.sort_values(by='dist_km', ascending=False).iloc[0][[col_nombre,'dist_km']].to_dict()
-                    cliente_mas_cercano = df.sort_values(by='dist_km', ascending=True).iloc[0][[col_nombre,'dist_km']].to_dict()
-                else:
-                    cliente_mas_lejano = {'nombre':'N/A','dist_km': float(df['dist_km'].max())}
-                    cliente_mas_cercano = {'nombre':'N/A','dist_km': float(df['dist_km'].min())}
-
-        # mostrar KPIs
-        col1,col2,col3,col4 = st.columns(4)
-        col1.metric('Total clientes', total_clientes)
-        col2.metric('Total rutas', total_rutas)
-        col3.metric('Atendidos', atendidos)
-        col4.metric('% Entregados', f"{round((atendidos/total_clientes)*100,2) if total_clientes>0 else 0}%")
-
-        col5,col6,col7 = st.columns(3)
-        col5.metric('Tiempo promedio (min)', tiempo_promedio)
-        col6.metric('Distancia total (km)', distancia_total)
-        col7.metric('Dist prom por cliente (km)', distancia_prom)
-
-        st.markdown('---')
-
-        # Clientes por ruta
-        st.subheader('Clientes por ruta')
-        if col_ruta and col_ruta in df.columns:
-            ruta_counts = df[col_ruta].value_counts().reset_index()
-            ruta_counts.columns = ['ruta','clientes']
-            fig = px.bar(ruta_counts, x='ruta', y='clientes')
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info('No hay columna de RUTA para mostrar clientes por ruta.')
-
-        # Ranking por distancia
-        st.subheader('Ranking de clientes por distancia')
-        if 'dist_km' in df.columns:
-            cols_to_show = [c for c in [col_nombre, 'dist_km', col_ruta] if c and c in df.columns]
-            if cols_to_show:
-                st.dataframe(df[cols_to_show].sort_values(by='dist_km', ascending=False).head(50))
-            else:
-                st.warning('No hay columnas disponibles para mostrar ranking.')
-        else:
-            st.info('No se calculó dist_km (faltan lat/lon en los datos).')
+        st.info("No hay datos en la base de datos para mostrar los KPIs.")
 
 # -----------------------------
 # SEGUIMIENTO
