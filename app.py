@@ -20,7 +20,7 @@ SAMPLE_CLIENTES = "/mnt/data/datos_entregas_15000_COLAB (1).csv"
 SAMPLE_UBIC = "/mnt/data/ubicaciones_unicas_colab (1).csv"
 
 # ===============================
-# 🔗 Conexión a la base de datos PostgreSQL de Render (o local DB por defecto)
+# 🔗 Conexión a la base de datos (SQLite por defecto para portabilidad)
 # ===================================================
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -33,7 +33,7 @@ REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
 # Configuración de página
 st.set_page_config(page_title="ChivoFast Dashboard", layout="wide")
-st.title("📦 ChivoFast — Dashboard Logístico (Normalizado)")
+st.title("📦 ChivoFast — Dashboard Logístico (Corregido)")
 
 # -----------------------------
 # Utilidades de lectura y normalización
@@ -59,7 +59,7 @@ def normalize_columns(df):
     df = df.copy()
     col_map = {}
     for col in df.columns:
-        c = col.strip().lower()
+        c = str(col).strip().lower()
         c = c.replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').replace('ñ','n')
         c = re.sub(r'[^a-z0-9_]', '_', c)
         c = re.sub(r'_+', '_', c).strip('_')
@@ -81,11 +81,20 @@ def normalize_columns(df):
 
 
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
+    # robust Haversine with NaN handling
+    try:
+        if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
+            return np.nan
+        R = 6371.0
+        phi1 = math.radians(float(lat1))
+        phi2 = math.radians(float(lat2))
+        dphi = math.radians(float(lat2) - float(lat1))
+        dlambda = math.radians(float(lon2) - float(lon1))
+        a = math.sin(dphi/2.0)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2.0)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    except Exception:
+        return np.nan
+
 
 @st.cache_data(ttl=300)
 def load_table(name):
@@ -103,11 +112,12 @@ def load_table(name):
 def check_table_exists_local(name):
     try:
         with engine.connect() as conn:
-            res = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}';")) if DATABASE_URL.startswith('sqlite') else conn.execute(text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{name}')"))
-            # for sqlite, res.fetchall() returns rows if exists
             if DATABASE_URL.startswith('sqlite'):
+                res = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}';"))
                 return len(res.fetchall())>0
-            return res.scalar()
+            else:
+                res = conn.execute(text(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{name}')"))
+                return res.scalar()
     except Exception:
         return False
 
@@ -376,15 +386,25 @@ elif selected == "KPIs":
         else:
             tiempo_promedio = 'No disponible'
 
-        # distancias
+        # distancias (el usuario indicó que siempre hay lat/lon)
         if 'lat' in df.columns and 'lon' in df.columns:
+            # convertir a num
+            df['lat'] = pd.to_numeric(df['lat'], errors='coerce')
+            df['lon'] = pd.to_numeric(df['lon'], errors='coerce')
+            # eliminar filas sin coordenadas
+            df = df.dropna(subset=['lat','lon']).reset_index(drop=True)
             base_lat = df['lat'].mean()
             base_lon = df['lon'].mean()
+            # calcular distancias
             df['dist_km'] = df.apply(lambda r: haversine(base_lat, base_lon, r['lat'], r['lon']), axis=1)
             distancia_total = round(df['dist_km'].sum(),2)
             distancia_prom = round(df['dist_km'].mean(),2)
-            cliente_mas_lejano = df.sort_values(by='dist_km', ascending=False).iloc[0][['nombre','dist_km']].to_dict()
-            cliente_mas_cercano = df.sort_values(by='dist_km', ascending=True).iloc[0][['nombre','dist_km']].to_dict()
+            # defensivo: asegurar que existan filas
+            if len(df) > 0:
+                cliente_mas_lejano = df.sort_values(by='dist_km', ascending=False).iloc[0][['nombre','dist_km']].to_dict() if 'nombre' in df.columns else {'nombre': 'N/A', 'dist_km': df['dist_km'].max()}
+                cliente_mas_cercano = df.sort_values(by='dist_km', ascending=True).iloc[0][['nombre','dist_km']].to_dict() if 'nombre' in df.columns else {'nombre': 'N/A', 'dist_km': df['dist_km'].min()}
+            else:
+                cliente_mas_lejano = cliente_mas_cercano = {'nombre': 'N/A', 'dist_km': 0}
         else:
             distancia_total = distancia_prom = cliente_mas_lejano = cliente_mas_cercano = 'No disponible'
 
@@ -408,8 +428,18 @@ elif selected == "KPIs":
             st.plotly_chart(fig, use_container_width=True)
 
         st.subheader('Ranking de clientes por distancia')
-        if 'dist_km' in df.columns:
-            st.dataframe(df[['nombre','ruta','dist_km']].sort_values(by='dist_km', ascending=False).head(50))
+        # FIX: comprobación segura antes de mostrar la tabla
+        cols_needed = [c for c in ['nombre','ruta','dist_km'] if c in df.columns]
+        if 'dist_km' not in df.columns:
+            st.warning('⚠️ No se pudo calcular distancias (faltan lat/lon).')
+        elif len(cols_needed) == 0:
+            st.warning('⚠️ No hay columnas disponibles para mostrar el ranking.')
+        else:
+            # si 'ruta' no existe, mostramos solo nombre y dist_km
+            if 'ruta' not in df.columns:
+                st.dataframe(df[['nombre','dist_km']].sort_values(by='dist_km', ascending=False).head(50))
+            else:
+                st.dataframe(df[['nombre','ruta','dist_km']].sort_values(by='dist_km', ascending=False).head(50))
 
 # -----------------------------
 # Seguimiento: listado de rutas activas + mini-mapas
