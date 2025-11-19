@@ -1,5 +1,8 @@
 streamlit
-streamlit-option-menu
 pandas
+numpy
+plotly
 folium
 streamlit-folium
+sqlalchemy
+google-genai  <-- ¡Esta es la línea clave!
