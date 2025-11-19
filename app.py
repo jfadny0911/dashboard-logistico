@@ -240,48 +240,78 @@ elif selected == "Clientes":
 
         st.dataframe(filtered[cols], use_container_width=True)
 
-# -----------------------------
-# MAPA: heatmap y puntos con cluster
-# -----------------------------
-elif selected == "Mapa":
-    st.header('🗺️ Mapa — HeatMap y puntos')
-    df_ubic = load_table('ubicaciones')
-    df_clients = load_table('clientes')
+# ================================
+# 🔥 MAPA HÍBRIDO (Reemplaza actual)
+# ================================
 
-    if df_ubic.empty and df_clients.empty:
-        st.info('No hay datos de ubicaciones o clientes. Sube archivos en "Ver Datos".')
-    else:
-        if not df_clients.empty:
-            dfc = normalize_columns(df_clients.copy())
-            dfc['lat'] = pd.to_numeric(dfc.get('lat'), errors='coerce')
-            dfc['lon'] = pd.to_numeric(dfc.get('lon'), errors='coerce')
-            dfc.dropna(subset=['lat','lon'], inplace=True)
-            center = [dfc['lat'].mean(), dfc['lon'].mean()]
-        else:
-            du = normalize_columns(df_ubic.copy())
-            du['lat'] = pd.to_numeric(du.get('lat'), errors='coerce')
-            du['lon'] = pd.to_numeric(du.get('lon'), errors='coerce')
-            du.dropna(subset=['lat','lon'], inplace=True)
-            dfc = du
-            center = [du['lat'].mean(), du['lon'].mean()]
+st.subheader("🗺️ Mapa Híbrido de Entregas (Heatmap + Burbujas + Marcadores + Clúster)")
 
-        m = folium.Map(location=center, zoom_start=8)
-        # add heatmap from clientes if entregas exist
-        df_ent = load_table('entregas')
-        if not df_ent.empty:
-            counts = df_ent.groupby('ubicacion').size().reset_index(name='freq')
-            merged = pd.merge(counts, dfc, left_on='ubicacion', right_on='nombre', how='inner') if 'nombre' in dfc.columns else counts
-            heat_list = merged[['lat','lon','freq']].values.tolist() if {'lat','lon','freq'}.issubset(merged.columns) else []
-        else:
-            heat_list = []
-        if heat_list:
-            HeatMap(heat_list, radius=12, min_opacity=0.3).add_to(m)
+from folium.plugins import MarkerCluster, HeatMap
 
-        # add markers
-        for _, r in dfc.iterrows():
-            folium.CircleMarker(location=[r['lat'], r['lon']], radius=3, tooltip=str(r.get('nombre',''))).add_to(m)
+# Crear mapa base centrado en promedio de coordenadas
+m = folium.Map(
+    location=[merged['lat'].mean(), merged['lon'].mean()],
+    zoom_start=12,
+    tiles="CartoDB Positron"  # limpio y profesional
+)
 
-        st_folium(m, width=1000, height=600)
+# --------------------------------------------------
+# 1) 🔥 HEATMAP MULTICOLOR
+# --------------------------------------------------
+
+HeatMap(
+    merged[['lat', 'lon', 'freq']].values.tolist(),
+    radius=22,
+    blur=30,
+    min_opacity=0.25,
+    gradient={
+        0.1: 'purple',
+        0.3: 'blue',
+        0.5: 'cyan',
+        0.7: 'lime',
+        0.9: 'yellow',
+        1.0: 'red'
+    }
+).add_to(m)
+
+# --------------------------------------------------
+# 2) 🟦 CÍRCULOS PROPORCIONALES (BUBBLE MAP)
+# --------------------------------------------------
+
+for _, row in merged.iterrows():
+    folium.Circle(
+        location=[row['lat'], row['lon']],
+        radius=row['freq'] * 12,
+        color="blue",
+        fill=True,
+        fill_color="blue",
+        fill_opacity=0.25,
+        popup=f"{row[col_ubic]}: {row['freq']} entregas",
+    ).add_to(m)
+
+# --------------------------------------------------
+# 3) 📌 CLÚSTER DE MARCADORES
+# --------------------------------------------------
+
+cluster = MarkerCluster().add_to(m)
+
+# --------------------------------------------------
+# 4) 📍 MARCADORES INDIVIDUALES
+# --------------------------------------------------
+
+for _, row in merged.iterrows():
+    folium.Marker(
+        location=[row['lat'], row['lon']],
+        popup=f"""
+        <b>Ubicación:</b> {row[col_ubic]}<br>
+        <b>Entregas:</b> {row['freq']}
+        """,
+        icon=folium.Icon(color="blue", icon="info-sign")
+    ).add_to(cluster)
+
+# Mostrar mapa en Streamlit
+st_folium(m, width=950, height=550)
+
 
 # -----------------------------
 # PEDIDOS: ver y crear
