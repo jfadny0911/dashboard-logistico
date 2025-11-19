@@ -421,7 +421,7 @@ elif selected == "Asignación":
 # KPIs (REESCRITOS ROBUSTOS)
 # -----------------------------
 # --- 📈 KPIs y Dashboard estilo BI ---
-elif menu == "KPIs":
+elif selected == "KPIs":
     st.header("📈 Indicadores Clave (KPIs)")
     df = load_data_from_db()
     
