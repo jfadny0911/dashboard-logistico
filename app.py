@@ -423,7 +423,7 @@ elif selected == "Asignación":
 # --- 📈 KPIs y Dashboard estilo BI ---
 elif selected == "KPIs":
     st.header("📈 Indicadores Clave (KPIs)")
-    df = load_data_from_db()
+    
     
     if not df.empty:
         # Verifica la existencia de columnas clave para evitar errores
