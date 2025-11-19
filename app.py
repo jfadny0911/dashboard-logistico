@@ -153,7 +153,7 @@ if menu == "Ver Datos":
                     # Verificar la existencia de la columna departamento antes de continuar
                     if 'departamento' not in df_to_load.columns:
                         st.error("Error crítico: La columna 'departamento' no fue encontrada después de la normalización. Revisa tu archivo CSV.")
-                        return
+                        
 
                     # Lógica estándar de verificación de columnas
                     if 'orden_gestion' not in df_to_load.columns:
