@@ -533,6 +533,7 @@ elif menu == "Predicción de Rutas":
         st.info("Por favor, sube el archivo de ubicaciones con coordenadas para ver las predicciones de ruta.")
 
 # --- Sección para seguimiento de rutas ---
+# --- Sección para seguimiento de rutas ---
 elif menu == "Seguimiento de Rutas":
     st.header("🚚 Seguimiento de Rutas")
     
@@ -542,6 +543,7 @@ elif menu == "Seguimiento de Rutas":
     if not df_entregas.empty and ubicaciones_df is not None and not ubicaciones_df.empty:
         ordenes_activas = df_entregas[df_entregas['estado'] == 'Activa']
         
+        # CORRECCIÓN DE KEYERROR: Se verifica si la columna existe antes de usarla
         if 'repartidor' not in ordenes_activas.columns:
             st.error("Error: La base de datos no tiene la columna 'repartidor'. Por favor, **borra y sube tus datos nuevamente** en la sección 'Ver Datos' para actualizar la estructura.")
             st.stop()
@@ -593,7 +595,19 @@ elif menu == "Seguimiento de Rutas":
                     
                     progreso = 1 - (tiempo_restante_segundos / (row['tiempo_predicho'] * 60))
                 
-            
+                # Coordenadas para enlaces (Se debe asegurar que el DF de ubicaciones se limpió en la sección de Predicciones)
+                ubicaciones_df_cleaned = st.session_state.get('ubicaciones_df').copy()
+                if ubicaciones_df_cleaned is not None:
+                     ubicaciones_df_cleaned['latitud'] = pd.to_numeric(ubicaciones_df_cleaned['latitud'], errors='coerce')
+                     ubicaciones_df_cleaned['longitud'] = pd.to_numeric(ubicaciones_df_cleaned['longitud'], errors='coerce')
+
+                     coordenadas = {
+                        loc['ubicacion']: [loc['latitud'], loc['longitud']]
+                        for _, loc in ubicaciones_df_cleaned.iterrows()
+                     }
+                
+                origen_coords = coordenadas.get(row['ubicacion'], [13.7, -89.2])
+                destino_coords = coordenadas.get(row['destino'], [13.7, -89.2])
 
                 st.markdown(f"**Gestión {row['orden_gestion']} - Repartidor: {row['repartidor']}**")
                 st.info(f"Ruta: **{row['ubicacion']}** -> **{row['destino']}**")
