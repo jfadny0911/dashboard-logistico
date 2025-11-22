@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai # Importación de la librería de Google GenAI
+from google import genai 
 import numpy as np 
 
 # ----------------------------
@@ -23,7 +23,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
+# ADVERTENCIA: DEBES REEMPLAZAR ESTA CLAVE POR UNA NUEVA Y VÁLIDA
+GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
 
 # Inicialización del Cliente Gemini
 client = None
@@ -31,7 +32,8 @@ if GEMINI_API_KEY:
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
-        st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
+        # No mostrar el detalle del error 403 al usuario final, solo un mensaje general.
+        st.error("Error al inicializar el cliente Gemini. Por favor, verifica tu clave API (está revocada).")
         client = None
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
@@ -470,11 +472,7 @@ elif selected == "Pedidos":
             next_num = get_next_gestion_number(df_ent)
             orden_final = orden if orden else f"{next_num:04d}"
             
-            # Nota: Al usar "append" en la BD, la tabla debe tener las columnas que se insertan.
-            # Aquí asumimos que la tabla 'entregas' ya fue creada con el esquema completo.
-            
             # Verificar si la tabla existe y forzar la adición de la columna si es necesario
-            # (Aunque esto debería manejarse en la sección "Ver Datos", se agrega aquí para seguridad)
             if not check_table_exists_local('entregas'):
                 st.warning("La tabla de entregas se recreará con el esquema completo.")
                 
@@ -633,9 +631,35 @@ elif selected == "Seguimiento":
         st.info("No hay entregas.")
     else:
         df_ent = normalize_columns_df(df_ent.copy())
-        activos = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains('activa|en curso|enprogreso', na=False)]
+        # Definición de estados activos (usado para mostrar y para el botón masivo)
+        active_statuses_regex = 'activa|en curso|enprogreso'
+        activos = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains(active_statuses_regex, na=False)]
         
-        # Merge coordinates from ubicaciones table
+        # --- NUEVO: Botón de entrega masiva ---
+        if not activos.empty:
+            
+            # Obtener los estados exactos de las rutas activas para la cláusula WHERE
+            # Esto previene errores si algún estado activo tiene mayúsculas/minúsculas diferentes
+            active_statuses_list = activos['estado'].unique().tolist()
+            # Escapar comillas para la sentencia SQL
+            safe_statuses = [f"'{s.replace("'", "''")}'" for s in active_statuses_list]
+            status_list_sql = ", ".join(safe_statuses)
+            
+            if st.button(f"✅ Marcar las {len(activos)} rutas activas como Entregadas"):
+                try:
+                    with engine.connect() as conn:
+                        # Actualiza todos los registros con alguno de los estados activos encontrados
+                        update_query = text(f"UPDATE entregas SET estado='Entregado' WHERE estado IN ({status_list_sql})")
+                        conn.execute(update_query)
+                        conn.commit()
+                    st.success(f"¡{len(activos)} rutas marcadas como Entregadas!")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al marcar entregas masivas: {e}")
+            st.markdown("---")
+
+        # Merge coordinates from ubicaciones table (RESTO DEL CÓDIGO DE SEGUIMIENTO)
         df_merged = pd.DataFrame()
         if not df_ubic.empty:
              df_ubic = df_ubic.copy()
@@ -653,7 +677,8 @@ elif selected == "Seguimiento":
             df_merged = activos
 
         if df_merged.empty:
-            st.info("No hay rutas activas.")
+            if activos.empty:
+                st.info("No hay rutas activas para seguimiento.")
         else:
             # Filter by repartidor
             rep_opts = ['Todos'] + sorted(df_merged.get('repartidor', pd.Series()).dropna().unique().tolist())
@@ -740,6 +765,7 @@ elif selected == "Seguimiento":
                         st.markdown(f"**Cliente:** {row.get('nombre','N/A')}")
                         
                         st.markdown("---")
+                        # Botón de entrega individual (aún disponible)
                         if st.button(f"Marcar Entregado #{row.get('orden_gestion')}", key=f"ent_{row.get('orden_gestion')}"):
                             with engine.connect() as conn:
                                 conn.execute(text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion='{row.get('orden_gestion')}'"))
