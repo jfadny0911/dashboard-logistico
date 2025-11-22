@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai # Importación de la librería de Google GenAI
+from google import genai 
 
 # ----------------------------
 # Database default (SQLite for portability)
@@ -415,30 +415,21 @@ elif selected == "Mapa":
                     # build map
                     m = folium.Map(location=[merged['lat'].mean(), merged['lon'].mean()], zoom_start=11, tiles="CartoDB Positron")
 
-                    # 1) Heatmap (multicolor)
-                    HeatMap(heat_data, radius=18, blur=20, min_opacity=0.2,
-                            gradient={0.1:'purple',0.3:'blue',0.5:'cyan',0.7:'lime',0.9:'yellow',1.0:'red'}).add_to(m)
+                    # 1) Heatmap (simple)
+                    HeatMap(heat_data, radius=15, blur=15, min_opacity=0.3,
+                            gradient={0.1:'blue', 0.5:'cyan', 1.0:'red'}).add_to(m)
 
-                    # 2) proportional circles (on sampled markers_df)
+                    # 2) Simple Markers for context (sampled)
                     for _, row in markers_df.iterrows():
-                        folium.Circle(
+                        folium.CircleMarker(
                             location=[row['lat'], row['lon']],
-                            radius=max(6, int(row['freq']) * 8),
-                            color="blue",
+                            radius=4,
+                            color="#007bff",
                             fill=True,
-                            fill_opacity=0.25,
+                            fill_opacity=0.7,
                             popup=f"{row.get('nombre', '')}: {int(row['freq'])} entregas"
                         ).add_to(m)
-
-                    # 3) cluster for detail (sampled)
-                    cluster = MarkerCluster().add_to(m)
-                    for _, row in markers_df.iterrows():
-                        folium.Marker(
-                            location=[row['lat'], row['lon']],
-                            popup=f"<b>{row.get('nombre','')}</b><br>Entregas: {int(row['freq'])}",
-                            icon=folium.Icon(color="blue", icon="info-sign")
-                        ).add_to(cluster)
-
+                    
                     st_folium(m, width=1000, height=650)
 
 # -----------------------------
@@ -507,14 +498,16 @@ elif selected == "Asignación":
         pendientes = df_ent[df_ent.get('estado','').astype(str).str.lower().isin(['pendiente', 'asignado', 'pendiente_asignado'])]
         st.subheader("Pedidos Pendientes de Asignar/Iniciar")
         
+        # MOSTRAR ÓRDENES DISPONIBLES
+        available_orders = pendientes['orden_gestion'].tolist() if not pendientes.empty else []
+        if available_orders:
+            st.info(f"Órdenes disponibles: **{', '.join(available_orders)}**")
+        
         cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
         st.dataframe(pendientes[cols_show].head(200))
         
         # CAMBIO SOLICITADO: Digitar el ID de la orden
-        default_orders = pendientes['orden_gestion'].tolist() if not pendientes.empty else []
-        
-        # Usamos un text_input para digitar el ID
-        sel_ord_input = st.text_input("Digita el ID de la Orden a Asignar", value=default_orders[0] if default_orders else "")
+        sel_ord_input = st.text_input("Digita el ID de la Orden a Asignar", value=available_orders[0] if available_orders else "")
         sel_rep = st.selectbox("Repartidor", options=REPARTIDORES)
         
         # Botón Asignar (Activa la ruta)
@@ -809,7 +802,7 @@ elif selected == "Seguimiento":
                         if dest_coords:
                             m = folium.Map(location=[(origin_coords[0] + dest_coords[0])/2, (origin_coords[1] + dest_coords[1])/2], zoom_start=12, tiles="CartoDB Positron")
                             folium.Marker(origin_coords, popup="Origen", icon=folium.Icon(color="green", icon="play")).add_to(m)
-                            folium.Marker(dest_coords, popup=f"Destino: {row.get('nombre','N/A')}", icon=folium.Icon(color=color_progreso, icon="flag")).add_to(m) # Usa el color de progreso
+                            folium.Marker(dest_coords, popup=f"Destino: {row.get('nombre','N/A')}", icon=folium.Icon(color=color_progreso, icon="flag")).add_to(m)
                             folium.PolyLine([origin_coords, dest_coords], color=color_progreso, weight=5).add_to(m)
                             st_folium(m, width=350, height=300, key=f"map_{row.get('orden_gestion')}")
                             st.markdown(f"[Abrir en Google Maps](http://maps.google.com/maps?saddr={origin_coords[0]},{origin_coords[1]}&daddr={dest_coords[0]},{dest_coords[1]})")
