@@ -11,21 +11,21 @@ from folium.plugins import HeatMap, MarkerCluster
 from streamlit_option_menu import option_menu
 from datetime import datetime, timedelta
 import random
+from io import StringIO
 import re
 import math
 from typing import Optional, Tuple
 from google import genai 
 
 # ----------------------------
-# Config / sample file paths (AJUSTADO: RUTAS DE EJEMPLO ELIMINADAS)
-# ----------------------------
-
 # Database default (SQLite for portability)
+# ----------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
+# ADVERTENCIA: DEBES REEMPLAZAR ESTA CLAVE POR UNA NUEVA Y VÁLIDA
+GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
 
 # Inicialización del Cliente Gemini
 client = None
@@ -521,7 +521,11 @@ elif selected == "Asignación":
                 # 1. Asignar repartidor, cambiar estado a 'Activa' y poner hora de inicio (datetime.now())
                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 with engine.connect() as conn:
-                    conn.execute(text(f"UPDATE entregas SET repartidor='{sel_rep}', estado='Activa', inicio_ruta='{current_time}' WHERE orden_gestion='{sel_ord}'")) 
+                    # Usamos parameterized query para evitar SQL injection y errores de tipo
+                    conn.execute(
+                        text("UPDATE entregas SET repartidor=:rep, estado='Activa', inicio_ruta=:time WHERE orden_gestion=:ord"),
+                        {"rep": sel_rep, "time": current_time, "ord": sel_ord}
+                    )
                     conn.commit()
                 st.success(f"Ruta para orden {sel_ord} asignada a {sel_rep} e INICIADA.")
                 st.cache_data.clear()
@@ -642,30 +646,6 @@ elif selected == "Seguimiento":
         active_statuses_regex = 'activa|en curso|enprogreso|asignado'
         activos = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains(active_statuses_regex, na=False)]
         
-        # --- NUEVO: Botón de entrega masiva ---
-        if not activos.empty:
-            
-            # Obtener los estados exactos de las rutas activas para la cláusula WHERE
-            # Esto previene errores si algún estado activo tiene mayúsculas/minúsculas diferentes
-            active_statuses_list = activos['estado'].unique().tolist()
-            # Escapar comillas para la sentencia SQL
-            safe_statuses = [f"'{s.replace("'", "''")}'" for s in active_statuses_list]
-            status_list_sql = ", ".join(safe_statuses)
-            
-            if st.button(f"✅ Marcar las {len(activos)} rutas activas como Entregadas"):
-                try:
-                    with engine.connect() as conn:
-                        # Actualiza todos los registros con alguno de los estados activos encontrados
-                        update_query = text(f"UPDATE entregas SET estado='Entregado' WHERE estado IN ({status_list_sql})")
-                        conn.execute(update_query)
-                        conn.commit()
-                    st.success(f"¡{len(activos)} rutas marcadas como Entregadas!")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al marcar entregas masivas: {e}")
-            st.markdown("---")
-
         # Merge coordinates from ubicaciones table (RESTO DEL CÓDIGO DE SEGUIMIENTO)
         df_merged = pd.DataFrame()
         if not df_ubic.empty:
@@ -685,8 +665,27 @@ elif selected == "Seguimiento":
 
         if df_merged.empty:
             if activos.empty:
-                st.info("No hay rutas activas para seguimiento.")
+                st.info("No hay rutas activas.")
         else:
+            # --- Botón de entrega masiva ---
+            if not df_merged.empty:
+                active_statuses_list = df_merged['estado'].unique().tolist()
+                safe_statuses = [f"'{s.replace("'", "''")}'" for s in active_statuses_list]
+                status_list_sql = ", ".join(safe_statuses)
+                
+                if st.button(f"✅ Marcar las {len(df_merged)} rutas activas como Entregadas"):
+                    try:
+                        with engine.connect() as conn:
+                            update_query = text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion IN ({', '.join([f"'{o}'" for o in df_merged['orden_gestion'].tolist()])})")
+                            conn.execute(update_query)
+                            conn.commit()
+                        st.success(f"¡{len(df_merged)} rutas marcadas como Entregadas!")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al marcar entregas masivas: {e}")
+                st.markdown("---")
+
             # Filter by repartidor
             rep_opts = ['Todos'] + sorted(df_merged.get('repartidor', pd.Series()).dropna().unique().tolist())
             sel_rep = st.selectbox("Filtrar por repartidor", options=rep_opts)
@@ -704,10 +703,10 @@ elif selected == "Seguimiento":
                 try:
                     inicio_ruta_str = str(row.get('inicio_ruta'))
                     
-                    # Si la ruta fue asignada pero no iniciada (inicio_ruta es None), no calculamos el progreso
-                    if inicio_ruta_str == 'None' or inicio_ruta_str == 'nan':
-                        st.info(f"🚚 Orden {row.get('orden_gestion')} asignada. Esperando INICIO de ruta.")
-                        continue # Salta a la siguiente orden
+                    # 1. Manejar órdenes ASIGNADAS (pero sin inicio real de tiempo)
+                    if inicio_ruta_str == 'None' or inicio_ruta_str == 'nan' or row.get('estado','').lower() == 'asignado':
+                        st.info(f"🚚 Orden {row.get('orden_gestion')} asignada. Esperando INICIO de ruta para seguimiento de tiempo.")
+                        continue
                         
                     inicio_ruta_dt = pd.to_datetime(inicio_ruta_str, errors='coerce')
                     if pd.isna(inicio_ruta_dt):
@@ -716,11 +715,8 @@ elif selected == "Seguimiento":
                          
                     tiempo_predicho_min = pd.to_numeric(row.get('tiempo_predicho'), errors='coerce')
                     if pd.isna(tiempo_predicho_min) or tiempo_predicho_min <= 0:
-                        # Si el tiempo predicho es nulo, usamos un valor por defecto para el progreso (ej: 30 minutos)
-                        tiempo_predicho_min = 30 
-                        st.warning(f"Usando tiempo predicho por defecto (30 min) para {row.get('orden_gestion')}.")
-
-
+                        tiempo_predicho_min = 30 # Default safety time
+                    
                     tiempo_transcurrido = datetime.now() - inicio_ruta_dt
                     tiempo_restante_segundos = tiempo_predicho_min * 60 - tiempo_transcurrido.total_seconds()
 
@@ -743,15 +739,16 @@ elif selected == "Seguimiento":
                      continue
 
                 # --- COORDINATE LOGIC ---
+                # Get the destination coordinates, prioritizing the merged column
                 lat_dest = row.get('lat_ubic') if 'lat_ubic' in row and not pd.isna(row.get('lat_ubic')) else row.get('lat')
                 lon_dest = row.get('lon_ubic') if 'lon_ubic' in row and not pd.isna(row.get('lon_ubic')) else row.get('lon')
 
-                # Usar coordenadas del centro (San Salvador) como origen por defecto
+                # Using San Salvador (approximate center) as default fallback for origin
                 origin_coords = [13.70, -89.20] 
                 dest_coords = [lat_dest, lon_dest]
                 
                 if pd.isna(lat_dest) or pd.isna(lon_dest):
-                    dest_coords = None 
+                    dest_coords = None # Mark as unusable
                 
                 # --- Rendering ---
                 st.markdown(f"### Orden #{row.get('orden_gestion')} ({row.get('repartidor')})")
@@ -776,11 +773,19 @@ elif selected == "Seguimiento":
                         
                         st.markdown("---")
                         if st.button(f"Marcar Entregado #{row.get('orden_gestion')}", key=f"ent_{row.get('orden_gestion')}"):
-                            with engine.connect() as conn:
-                                conn.execute(text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion='{row.get('orden_gestion')}'"))
-                            st.success("Marcada como entregada.")
-                            st.cache_data.clear()
-                            st.rerun()
+                            try:
+                                with engine.connect() as conn:
+                                    # Usar parameterized query para evitar errores de SQL y seguridad
+                                    conn.execute(
+                                        text("UPDATE entregas SET estado='Entregado' WHERE orden_gestion=:ord"),
+                                        {"ord": str(row.get('orden_gestion'))}
+                                    )
+                                    conn.commit()
+                                st.success("Marcada como entregada.")
+                                st.cache_data.clear()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error en BD al entregar: {e}")
 
                     with col_mapa:
                         if dest_coords:
