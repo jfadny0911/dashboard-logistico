@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai 
+from google import genai # Importación de la librería de Google GenAI
 
 # ----------------------------
 # Database default (SQLite for portability)
@@ -417,7 +417,7 @@ elif selected == "Mapa":
 
                     # 1) Heatmap (simple)
                     HeatMap(heat_data, radius=15, blur=15, min_opacity=0.3,
-                            gradient={0.1:'purple', 0.5:'cyan', 1.0:'red'}).add_to(m)
+                            gradient={0.1:'blue', 0.5:'cyan', 1.0:'red'}).add_to(m)
 
                     # 2) Simple Markers for context (sampled)
                     for _, row in markers_df.iterrows():
@@ -498,14 +498,14 @@ elif selected == "Asignación":
         pendientes = df_ent[df_ent.get('estado','').astype(str).str.lower().isin(['pendiente', 'asignado', 'pendiente_asignado'])]
         st.subheader("Pedidos Pendientes de Asignar/Iniciar")
         
+        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
+        st.dataframe(pendientes[cols_show].head(200))
+        
         # MOSTRAR ÓRDENES DISPONIBLES
         available_orders = pendientes['orden_gestion'].tolist() if not pendientes.empty else []
         if available_orders:
-            # CORRECCIÓN DE TYPEERROR: Convertir a string antes de join
+            # FIX: Asegurarse de que los elementos sean string antes de join
             st.info(f"Órdenes disponibles: **{', '.join(map(str, available_orders))}**")
-        
-        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
-        st.dataframe(pendientes[cols_show].head(200))
         
         # CAMBIO SOLICITADO: Digitar el ID de la orden
         sel_ord_input = st.text_input("Digita el ID de la Orden a Asignar", value=available_orders[0] if available_orders else "")
@@ -518,8 +518,8 @@ elif selected == "Asignación":
                 st.error("Por favor, digita un ID de orden válido.")
                 st.stop()
                 
-            # Buscar la orden en el listado de pendientes
-            orden_existe = sel_ord_input in pendientes['orden_gestion'].values
+            # Buscar la orden en el listado de pendientes (se debe convertir la columna a str para la búsqueda)
+            orden_existe = sel_ord_input in pendientes['orden_gestion'].astype(str).values
             
             if not orden_existe:
                 st.error(f"❌ La orden {sel_ord_input} no existe o no está en estado Pendiente/Asignado.")
