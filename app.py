@@ -39,13 +39,8 @@ if GEMINI_API_KEY:
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
-# Definiciones para el Agente IA (para simulación)
-TIPO_PEDIDO = ["restaurante", "supermercado", "tienda_en_linea", "farmacia"] # Usando minúsculas normalizadas
-CLIMA = ["soleado", "nublado", "lluvioso", "tormenta"]
-TRAFICO = ["bajo", "medio", "alto"]
-
 st.set_page_config(page_title="ChivoFast — Optimized Dashboard", layout="wide")
-st.title("📦 ChivoFast — Optimized Dashboard")
+st.title("📦 ChivoFast — Dashboard (Optimized)")
 
 # -----------------------------
 # Utilities
@@ -136,7 +131,7 @@ def load_table(name: str) -> pd.DataFrame:
 
 def clear_table(name: str):
     with engine.connect() as conn:
-        conn.execute(text(f"DELETE FROM {name}"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {name}")) # Usar DROP TABLE para eliminar el esquema
         conn.commit()
 
 def get_next_gestion_number(df: pd.DataFrame) -> int:
@@ -302,27 +297,36 @@ if selected == "Ver Datos":
             df_ped = normalize_columns_df(df_ped)
             st.dataframe(df_ped.head(200))
             if st.button('Agregar pedidos a entregas'):
-                # **Aquí está la CLAVE:** Forzar la adición de la columna 'prioridad' si falta
+                # Cargar el estado actual de las entregas para IDs secuenciales
+                df_ent_current = load_table('entregas')
+                current_count = len(df_ent_current)
+                
+                # --- Sanear y añadir columnas necesarias para la tabla 'entregas' ---
+                if 'orden_gestion' not in df_ped.columns:
+                     df_ped['orden_gestion'] = [f"{i+1:04d}" for i in range(current_count, current_count + len(df_ped))]
+                if 'estado' not in df_ped.columns:
+                     df_ped['estado'] = 'Pendiente'
+                if 'repartidor' not in df_ped.columns:
+                     df_ped['repartidor'] = np.random.choice(REPARTIDORES, len(df_ped)) # Asigna repartidor por defecto
                 if 'prioridad' not in df_ped.columns:
-                    df_ped['prioridad'] = 'Normal'
-                    st.warning("Columna 'prioridad' añadida con valor por defecto 'Normal'.")
-
-                with engine.connect() as conn:
-                    # Usamos if_exists='append' aquí para el caso de añadir, pero si la tabla es nueva, 
-                    # debemos asegurarnos de que la primera carga sea 'replace' o tenga todas las columnas.
-                    # Dado el error, la solución más limpia es borrar y recargar la tabla completa
+                     df_ped['prioridad'] = 'Normal' # Añade columna 'prioridad' con valor por defecto
+                     
+                # Borrar la tabla temporalmente para asegurar que el esquema 'prioridad' esté incluido
+                if check_table_exists_local('entregas'):
+                    clear_table('entregas')
                     
-                    # 1. Borrar la tabla antigua (si existe)
-                    if check_table_exists_local('entregas'):
-                        clear_table('entregas')
-                        st.info("Tabla 'entregas' recreada para incluir 'prioridad'.")
-                        
-                    # 2. Guardar el DataFrame con la columna "prioridad"
+                # Reinsertar todos los datos existentes (si los hay) y luego los nuevos
+                if not df_ent_current.empty:
+                    with engine.connect() as conn:
+                        df_ent_current.to_sql('entregas', conn, if_exists='append', index=False)
+                
+                # Insertar los nuevos pedidos
+                with engine.connect() as conn:
                     df_ped.to_sql('entregas', conn, if_exists='append', index=False)
                 
                 st.success('Pedidos añadidos a entregas.')
                 st.cache_data.clear()
-
+        
 # -----------------------------
 # Clientes view
 # -----------------------------
@@ -469,17 +473,8 @@ elif selected == "Pedidos":
             next_num = get_next_gestion_number(df_ent)
             orden_final = orden if orden else f"{next_num:04d}"
             
-            # Asegurar la columna 'prioridad' está presente en el esquema de la tabla
-            if not check_table_exists_local('entregas'):
-                # Si la tabla no existe, la siguiente llamada la creará con la estructura completa
-                st.warning("La tabla de entregas se recreará con la columna 'prioridad'.")
-                pass # Continuar para que to_sql la cree
-            elif 'prioridad' not in df_ent.columns:
-                # Si la tabla existe pero le falta 'prioridad', la única solución fiable es recrearla.
-                clear_table('entregas')
-                st.warning("La tabla de entregas se recreó para añadir la columna 'prioridad'.")
-
-
+            # Nota: Al usar "append" en la BD, la tabla debe tener las columnas que se insertan.
+            # Aquí asumimos que la tabla 'entregas' ya fue creada con el esquema completo.
             nueva = pd.DataFrame([{
                 "orden_gestion": orden_final,
                 "fecha": datetime.now(),
