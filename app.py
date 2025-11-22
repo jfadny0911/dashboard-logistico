@@ -1,3 +1,4 @@
+# app.py - ChivoFast Dashboard (Optimized)
 import os
 import streamlit as st
 import pandas as pd
@@ -8,22 +9,23 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap, MarkerCluster
 from streamlit_option_menu import option_menu
-import random
-from io import StringIO
-import re
 from datetime import datetime, timedelta
+import random
+import re
 import math
 from typing import Optional, Tuple
-from google import genai # Importación de la librería de Google GenAI
+from google import genai 
 
 # ----------------------------
-# Database default (SQLite for portability)
+# Config / sample file paths (AJUSTADO: RUTAS DE EJEMPLO ELIMINADAS)
 # ----------------------------
+
+# Database default (SQLite for portability)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
+GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
 
 # Inicialización del Cliente Gemini
 client = None
@@ -188,7 +190,7 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     # Usamos una muestra de 100 registros para no sobrecargar la API.
     df_sample = df_input.sample(min(100, len(df_input)), random_state=42) 
     
-    # --- CORRECCIÓN: INCLUIR 'orden_gestion' en el contexto enviado a Gemini ---
+    # Seleccionar columnas clave para el análisis
     cols_to_analyze = ['orden_gestion', 'repartidor', 'tiempo_entrega', 'retraso', 'clima', 'trafico', 'departamento', 'tipo_pedido']
     
     # Asegurar que las columnas existan antes de seleccionarlas
@@ -503,21 +505,28 @@ elif selected == "Asignación":
     if df_ent.empty:
         st.info("No hay entregas.")
     else:
-        pendientes = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains('pendiente')]
-        st.subheader("Pendientes")
-        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento'] if c in pendientes.columns]
+        # Filtramos pedidos PENDIENTES o ASIGNADOS (para reasignar)
+        pendientes = df_ent[df_ent.get('estado','').astype(str).str.lower().isin(['pendiente', 'asignado', 'pendiente_asignado'])]
+        st.subheader("Pedidos Pendientes de Asignar/Iniciar")
+        
+        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
         st.dataframe(pendientes[cols_show].head(200))
-        sel_ord = st.selectbox("Orden", options=pendientes['orden_gestion'].tolist() if not pendientes.empty else [])
+        
+        sel_ord = st.selectbox("Selecciona la Orden para Asignar e Iniciar Ruta", options=pendientes['orden_gestion'].tolist() if not pendientes.empty else [])
         sel_rep = st.selectbox("Repartidor", options=REPARTIDORES)
-        if st.button("Asignar") and sel_ord:
+        
+        # Botón Asignar (Activa la ruta)
+        if st.button("Asignar e Iniciar Ruta") and sel_ord:
             try:
+                # 1. Asignar repartidor, cambiar estado a 'Activa' y poner hora de inicio (datetime.now())
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 with engine.connect() as conn:
-                    conn.execute(text(f"UPDATE entregas SET repartidor='{sel_rep}', estado='Asignado' WHERE orden_gestion='{sel_ord}'")) # Update status to 'Asignado'
+                    conn.execute(text(f"UPDATE entregas SET repartidor='{sel_rep}', estado='Activa', inicio_ruta='{current_time}' WHERE orden_gestion='{sel_ord}'")) 
                     conn.commit()
-                st.success("Asignado.")
+                st.success(f"Ruta para orden {sel_ord} asignada a {sel_rep} e INICIADA.")
                 st.cache_data.clear()
             except Exception as e:
-                st.error(f"Error asignando: {e}")
+                st.error(f"Error asignando e iniciando ruta: {e}")
 
 # -----------------------------
 # KPIs (optimized)
@@ -630,7 +639,7 @@ elif selected == "Seguimiento":
     else:
         df_ent = normalize_columns_df(df_ent.copy())
         # Definición de estados activos (usado para mostrar y para el botón masivo)
-        active_statuses_regex = 'activa|en curso|enprogreso'
+        active_statuses_regex = 'activa|en curso|enprogreso|asignado'
         activos = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains(active_statuses_regex, na=False)]
         
         # --- NUEVO: Botón de entrega masiva ---
@@ -694,10 +703,12 @@ elif selected == "Seguimiento":
                 # --- TIME/PROGRESS CALCULATION ---
                 try:
                     inicio_ruta_str = str(row.get('inicio_ruta'))
+                    
+                    # Si la ruta fue asignada pero no iniciada (inicio_ruta es None), no calculamos el progreso
                     if inicio_ruta_str == 'None' or inicio_ruta_str == 'nan':
-                        st.info(f"🔴 Orden {row.get('orden_gestion')} no iniciada: Falta hora de inicio.")
-                        continue
-
+                        st.info(f"🚚 Orden {row.get('orden_gestion')} asignada. Esperando INICIO de ruta.")
+                        continue # Salta a la siguiente orden
+                        
                     inicio_ruta_dt = pd.to_datetime(inicio_ruta_str, errors='coerce')
                     if pd.isna(inicio_ruta_dt):
                          st.info(f"🔴 Orden {row.get('orden_gestion')}: Formato de fecha de inicio inválido.")
@@ -705,8 +716,10 @@ elif selected == "Seguimiento":
                          
                     tiempo_predicho_min = pd.to_numeric(row.get('tiempo_predicho'), errors='coerce')
                     if pd.isna(tiempo_predicho_min) or tiempo_predicho_min <= 0:
-                        st.error(f"❌ Orden {row.get('orden_gestion')}: Tiempo predicho inválido (0 o Nulo).")
-                        continue
+                        # Si el tiempo predicho es nulo, usamos un valor por defecto para el progreso (ej: 30 minutos)
+                        tiempo_predicho_min = 30 
+                        st.warning(f"Usando tiempo predicho por defecto (30 min) para {row.get('orden_gestion')}.")
+
 
                     tiempo_transcurrido = datetime.now() - inicio_ruta_dt
                     tiempo_restante_segundos = tiempo_predicho_min * 60 - tiempo_transcurrido.total_seconds()
@@ -730,16 +743,15 @@ elif selected == "Seguimiento":
                      continue
 
                 # --- COORDINATE LOGIC ---
-                # Get the destination coordinates, prioritizing the merged column
                 lat_dest = row.get('lat_ubic') if 'lat_ubic' in row and not pd.isna(row.get('lat_ubic')) else row.get('lat')
                 lon_dest = row.get('lon_ubic') if 'lon_ubic' in row and not pd.isna(row.get('lon_ubic')) else row.get('lon')
 
-                # Using San Salvador (approximate center) as default fallback for origin
+                # Usar coordenadas del centro (San Salvador) como origen por defecto
                 origin_coords = [13.70, -89.20] 
                 dest_coords = [lat_dest, lon_dest]
                 
                 if pd.isna(lat_dest) or pd.isna(lon_dest):
-                    dest_coords = None # Mark as unusable
+                    dest_coords = None 
                 
                 # --- Rendering ---
                 st.markdown(f"### Orden #{row.get('orden_gestion')} ({row.get('repartidor')})")
