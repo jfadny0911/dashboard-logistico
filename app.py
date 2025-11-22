@@ -417,7 +417,7 @@ elif selected == "Mapa":
 
                     # 1) Heatmap (simple)
                     HeatMap(heat_data, radius=15, blur=15, min_opacity=0.3,
-                            gradient={0.1:'blue', 0.5:'cyan', 1.0:'red'}).add_to(m)
+                            gradient={0.1:'purple', 0.5:'cyan', 1.0:'red'}).add_to(m)
 
                     # 2) Simple Markers for context (sampled)
                     for _, row in markers_df.iterrows():
@@ -501,7 +501,8 @@ elif selected == "Asignación":
         # MOSTRAR ÓRDENES DISPONIBLES
         available_orders = pendientes['orden_gestion'].tolist() if not pendientes.empty else []
         if available_orders:
-            st.info(f"Órdenes disponibles: **{', '.join(available_orders)}**")
+            # CORRECCIÓN DE TYPEERROR: Convertir a string antes de join
+            st.info(f"Órdenes disponibles: **{', '.join(map(str, available_orders))}**")
         
         cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
         st.dataframe(pendientes[cols_show].head(200))
