@@ -39,8 +39,13 @@ if GEMINI_API_KEY:
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
+# Definiciones para el Agente IA (para simulación)
+TIPO_PEDIDO = ["restaurante", "supermercado", "tienda_en_linea", "farmacia"] # Usando minúsculas normalizadas
+CLIMA = ["soleado", "nublado", "lluvioso", "tormenta"]
+TRAFICO = ["bajo", "medio", "alto"]
+
 st.set_page_config(page_title="ChivoFast — Optimized Dashboard", layout="wide")
-st.title("📦 ChivoFast — Dashboard (Optimized)")
+st.title("📦 ChivoFast — Optimized Dashboard")
 
 # -----------------------------
 # Utilities
@@ -297,8 +302,24 @@ if selected == "Ver Datos":
             df_ped = normalize_columns_df(df_ped)
             st.dataframe(df_ped.head(200))
             if st.button('Agregar pedidos a entregas'):
+                # **Aquí está la CLAVE:** Forzar la adición de la columna 'prioridad' si falta
+                if 'prioridad' not in df_ped.columns:
+                    df_ped['prioridad'] = 'Normal'
+                    st.warning("Columna 'prioridad' añadida con valor por defecto 'Normal'.")
+
                 with engine.connect() as conn:
+                    # Usamos if_exists='append' aquí para el caso de añadir, pero si la tabla es nueva, 
+                    # debemos asegurarnos de que la primera carga sea 'replace' o tenga todas las columnas.
+                    # Dado el error, la solución más limpia es borrar y recargar la tabla completa
+                    
+                    # 1. Borrar la tabla antigua (si existe)
+                    if check_table_exists_local('entregas'):
+                        clear_table('entregas')
+                        st.info("Tabla 'entregas' recreada para incluir 'prioridad'.")
+                        
+                    # 2. Guardar el DataFrame con la columna "prioridad"
                     df_ped.to_sql('entregas', conn, if_exists='append', index=False)
+                
                 st.success('Pedidos añadidos a entregas.')
                 st.cache_data.clear()
 
@@ -447,6 +468,18 @@ elif selected == "Pedidos":
             df_ent = load_table('entregas')
             next_num = get_next_gestion_number(df_ent)
             orden_final = orden if orden else f"{next_num:04d}"
+            
+            # Asegurar la columna 'prioridad' está presente en el esquema de la tabla
+            if not check_table_exists_local('entregas'):
+                # Si la tabla no existe, la siguiente llamada la creará con la estructura completa
+                st.warning("La tabla de entregas se recreará con la columna 'prioridad'.")
+                pass # Continuar para que to_sql la cree
+            elif 'prioridad' not in df_ent.columns:
+                # Si la tabla existe pero le falta 'prioridad', la única solución fiable es recrearla.
+                clear_table('entregas')
+                st.warning("La tabla de entregas se recreó para añadir la columna 'prioridad'.")
+
+
             nueva = pd.DataFrame([{
                 "orden_gestion": orden_final,
                 "fecha": datetime.now(),
@@ -454,7 +487,7 @@ elif selected == "Pedidos":
                 "lat": float(lat) if lat else None,
                 "lon": float(lon) if lon else None,
                 "tipo_pedido": tipo,
-                "prioridad": prioridad,
+                "prioridad": prioridad, # El valor que causaba el error
                 "estado": "Pendiente",
                 "repartidor": repartidor
             }])
@@ -465,6 +498,7 @@ elif selected == "Pedidos":
             st.cache_data.clear()
         except Exception as e:
             st.error(f"Error creando pedido: {e}")
+            st.error(f"Fondo en este error: {e}")
 
 # -----------------------------
 # Asignación
