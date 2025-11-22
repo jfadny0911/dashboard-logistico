@@ -25,8 +25,7 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} i
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
 # ADVERTENCIA: DEBES REEMPLAZAR ESTA CLAVE POR UNA NUEVA Y VÁLIDA
-GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww
-" 
+GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
 
 # Inicialización del Cliente Gemini
 client = None
