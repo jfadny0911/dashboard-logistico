@@ -747,4 +747,104 @@ elif selected == "Seguimiento":
                 lon_dest = row.get('lon_ubic') if 'lon_ubic' in row and not pd.isna(row.get('lon_ubic')) else row.get('lon')
 
                 # Using San Salvador (approximate center) as default fallback for origin
-                origin_coords
+                origin_coords = [13.70, -89.20] 
+                dest_coords = [lat_dest, lon_dest]
+                
+                if pd.isna(lat_dest) or pd.isna(lon_dest):
+                    dest_coords = None # Mark as unusable
+                
+                # --- Rendering ---
+                st.markdown(f"### Orden #{row.get('orden_gestion')} ({row.get('repartidor')})")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("ESTADO RUTA", estado_progreso)
+                c2.metric("DESTINO", row.get('nombre', 'N/A'))
+                c3.metric("TIEMPO RESTANTE", tiempo_restante_str)
+                c4.metric("INICIO", pd.to_datetime(row.get('inicio_ruta')).strftime('%H:%M:%S') if row.get('inicio_ruta') else 'N/A')
+
+                
+                with st.expander(f"Detalles de la Ruta {row.get('orden_gestion')}"):
+                    
+                    col_progreso, col_mapa = st.columns([1, 1])
+                    
+                    with col_progreso:
+                        st.markdown(f"**Progreso ({int(progreso * 100)}% completado)**")
+                        st.progress(progreso)
+                        
+                        st.markdown(f"**Estimado Total:** {int(tiempo_predicho_min)} min")
+                        st.markdown(f"**Condiciones:** {row.get('clima','N/A')} | {row.get('trafico','N/A')}")
+                        st.markdown(f"**Cliente:** {row.get('nombre','N/A')}")
+                        
+                        st.markdown("---")
+                        if st.button(f"Marcar Entregado #{row.get('orden_gestion')}", key=f"ent_{row.get('orden_gestion')}"):
+                            try:
+                                with engine.connect() as conn:
+                                    # Usar parameterized query para evitar errores de SQL y seguridad
+                                    conn.execute(
+                                        text("UPDATE entregas SET estado='Entregado' WHERE orden_gestion=:ord"),
+                                        {"ord": str(row.get('orden_gestion'))}
+                                    )
+                                    conn.commit()
+                                st.success("Marcada como entregada.")
+                                st.cache_data.clear()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error en BD al entregar: {e}")
+
+                    with col_mapa:
+                        if dest_coords:
+                            m = folium.Map(location=[(origin_coords[0] + dest_coords[0])/2, (origin_coords[1] + dest_coords[1])/2], zoom_start=12, tiles="CartoDB Positron")
+                            folium.Marker(origin_coords, popup="Origen", icon=folium.Icon(color="green", icon="play")).add_to(m)
+                            folium.Marker(dest_coords, popup=f"Destino: {row.get('nombre','N/A')}", icon=folium.Icon(color="red", icon="flag")).add_to(m)
+                            folium.PolyLine([origin_coords, dest_coords], color=color_progreso, weight=5).add_to(m)
+                            st_folium(m, width=350, height=300, key=f"map_{row.get('orden_gestion')}")
+                            st.markdown(f"[Abrir en Google Maps](http://maps.google.com/maps?saddr={origin_coords[0]},{origin_coords[1]}&daddr={dest_coords[0]},{dest_coords[1]})")
+                        else:
+                            st.info("Coordenadas de destino no disponibles.")
+                        
+                st.markdown("---")
+
+# -----------------------------
+# Agente IA (new section)
+# -----------------------------
+elif selected == "Agente IA":
+    st.header("💬 Agente de Análisis IA (ChivoBot - Conectado a Gemini)")
+    st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega. El análisis se realiza usando el modelo **Gemini 2.5 Flash** sobre una muestra de tus datos.")
+    
+    df_ent = load_table('entregas')
+
+    if df_ent.empty:
+        st.warning("⚠️ No hay datos de entregas cargados para realizar análisis.")
+        st.stop()
+
+    # Data preparation for AI analysis
+    df = df_ent.copy()
+    
+    # Area de entrada de la pregunta del usuario
+    user_query = st.text_area("Escribe tu pregunta aquí (ej: '¿Cuál es el retraso promedio del repartidor Mario?')", height=100)
+    
+    if st.button("Obtener Respuesta IA"):
+        if user_query:
+            with st.spinner("Conectando con Gemini y analizando datos..."):
+                # Llamar a la función de análisis de Gemini
+                ai_response = run_ai_analysis_gemini(df, user_query)
+                
+                st.success("🤖 Respuesta de ChivoBot:")
+                st.markdown(ai_response)
+        else:
+            st.error("Por favor, escribe una pregunta para el análisis.")
+
+# -----------------------------
+# Borrar datos
+# -----------------------------
+elif selected == "Borrar Datos":
+    st.header("🗑️ Borrar datos")
+    st.warning("Esto eliminará tablas: clientes, ubicaciones, entregas")
+    if st.button("Borrar TODO"):
+        try:
+            clear_table('clientes'); clear_table('ubicaciones'); clear_table('entregas')
+            st.success("Tablas borradas.")
+            st.cache_data.clear()
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+# EOF
