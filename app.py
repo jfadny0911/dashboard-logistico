@@ -1,6 +1,7 @@
 import os
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
@@ -13,8 +14,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai 
-import numpy as np 
+from google import genai # Importación de la librería de Google GenAI
 
 # ----------------------------
 # Database default (SQLite for portability)
@@ -23,8 +23,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-# ADVERTENCIA: DEBES REEMPLAZAR ESTA CLAVE POR UNA NUEVA Y VÁLIDA
-GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
+GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
 
 # Inicialización del Cliente Gemini
 client = None
@@ -32,8 +31,7 @@ if GEMINI_API_KEY:
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
-        # No mostrar el detalle del error 403 al usuario final, solo un mensaje general.
-        st.error("Error al inicializar el cliente Gemini. Por favor, verifica tu clave API (está revocada).")
+        st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
         client = None
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
@@ -190,8 +188,8 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     # Usamos una muestra de 100 registros para no sobrecargar la API.
     df_sample = df_input.sample(min(100, len(df_input)), random_state=42) 
     
-    # Seleccionar columnas clave para el análisis
-    cols_to_analyze = ['repartidor', 'tiempo_entrega', 'retraso', 'clima', 'trafico', 'departamento', 'tipo_pedido']
+    # --- CORRECCIÓN: INCLUIR 'orden_gestion' en el contexto enviado a Gemini ---
+    cols_to_analyze = ['orden_gestion', 'repartidor', 'tiempo_entrega', 'retraso', 'clima', 'trafico', 'departamento', 'tipo_pedido']
     
     # Asegurar que las columnas existan antes de seleccionarlas
     valid_cols = [col for col in cols_to_analyze if col in df_sample.columns]
@@ -697,137 +695,4 @@ elif selected == "Seguimiento":
                 try:
                     inicio_ruta_str = str(row.get('inicio_ruta'))
                     if inicio_ruta_str == 'None' or inicio_ruta_str == 'nan':
-                        st.info(f"🔴 Orden {row.get('orden_gestion')} no iniciada: Falta hora de inicio.")
-                        continue
-
-                    inicio_ruta_dt = pd.to_datetime(inicio_ruta_str, errors='coerce')
-                    if pd.isna(inicio_ruta_dt):
-                         st.info(f"🔴 Orden {row.get('orden_gestion')}: Formato de fecha de inicio inválido.")
-                         continue
-                         
-                    tiempo_predicho_min = pd.to_numeric(row.get('tiempo_predicho'), errors='coerce')
-                    if pd.isna(tiempo_predicho_min) or tiempo_predicho_min <= 0:
-                        st.error(f"❌ Orden {row.get('orden_gestion')}: Tiempo predicho inválido (0 o Nulo).")
-                        continue
-
-                    tiempo_transcurrido = datetime.now() - inicio_ruta_dt
-                    tiempo_restante_segundos = tiempo_predicho_min * 60 - tiempo_transcurrido.total_seconds()
-
-                    if tiempo_restante_segundos < 0:
-                        progreso = 1.0
-                        tiempo_restante_str = "¡Retraso!"
-                        estado_progreso = "🔴 En Retraso"
-                        color_progreso = "red"
-                    else:
-                        progreso = 1 - (tiempo_restante_segundos / (tiempo_predicho_min * 60))
-                        total_segundos = int(tiempo_restante_segundos)
-                        minutos = (total_segundos % 3600) // 60
-                        segundos = (total_segundos % 60)
-                        tiempo_restante_str = f"{minutos:02d}m {segundos:02d}s"
-                        estado_progreso = "En Curso"
-                        color_progreso = "blue"
-
-                except Exception as e:
-                     st.error(f"Error interno al calcular tiempo para orden {row.get('orden_gestion')}: {e}")
-                     continue
-
-                # --- COORDINATE LOGIC ---
-                # Get the destination coordinates, prioritizing the merged column
-                lat_dest = row.get('lat_ubic') if 'lat_ubic' in row and not pd.isna(row.get('lat_ubic')) else row.get('lat')
-                lon_dest = row.get('lon_ubic') if 'lon_ubic' in row and not pd.isna(row.get('lon_ubic')) else row.get('lon')
-
-                # Using San Salvador (approximate center) as default fallback for origin
-                origin_coords = [13.70, -89.20] 
-                dest_coords = [lat_dest, lon_dest]
-                
-                if pd.isna(lat_dest) or pd.isna(lon_dest):
-                    dest_coords = None # Mark as unusable
-                
-                # --- Rendering ---
-                st.markdown(f"### Orden #{row.get('orden_gestion')} ({row.get('repartidor')})")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("ESTADO RUTA", estado_progreso)
-                c2.metric("DESTINO", row.get('nombre', 'N/A'))
-                c3.metric("TIEMPO RESTANTE", tiempo_restante_str)
-                c4.metric("INICIO", pd.to_datetime(row.get('inicio_ruta')).strftime('%H:%M:%S') if row.get('inicio_ruta') else 'N/A')
-
-                
-                with st.expander(f"Detalles de la Ruta {row.get('orden_gestion')}"):
-                    
-                    col_progreso, col_mapa = st.columns([1, 1])
-                    
-                    with col_progreso:
-                        st.markdown(f"**Progreso ({int(progreso * 100)}% completado)**")
-                        st.progress(progreso)
-                        
-                        st.markdown(f"**Estimado Total:** {int(tiempo_predicho_min)} min")
-                        st.markdown(f"**Condiciones:** {row.get('clima','N/A')} | {row.get('trafico','N/A')}")
-                        st.markdown(f"**Cliente:** {row.get('nombre','N/A')}")
-                        
-                        st.markdown("---")
-                        # Botón de entrega individual (aún disponible)
-                        if st.button(f"Marcar Entregado #{row.get('orden_gestion')}", key=f"ent_{row.get('orden_gestion')}"):
-                            with engine.connect() as conn:
-                                conn.execute(text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion='{row.get('orden_gestion')}'"))
-                            st.success("Marcada como entregada.")
-                            st.cache_data.clear()
-                            st.rerun()
-
-                    with col_mapa:
-                        if dest_coords:
-                            m = folium.Map(location=[(origin_coords[0] + dest_coords[0])/2, (origin_coords[1] + dest_coords[1])/2], zoom_start=12, tiles="CartoDB Positron")
-                            folium.Marker(origin_coords, popup="Origen", icon=folium.Icon(color="green", icon="play")).add_to(m)
-                            folium.Marker(dest_coords, popup=f"Destino: {row.get('nombre','N/A')}", icon=folium.Icon(color="red", icon="flag")).add_to(m)
-                            folium.PolyLine([origin_coords, dest_coords], color=color_progreso, weight=5).add_to(m)
-                            st_folium(m, width=350, height=300, key=f"map_{row.get('orden_gestion')}")
-                            st.markdown(f"[Abrir en Google Maps](http://maps.google.com/maps?saddr={origin_coords[0]},{origin_coords[1]}&daddr={dest_coords[0]},{dest_coords[1]})")
-                        else:
-                            st.info("Coordenadas de destino no disponibles.")
-                        
-                st.markdown("---")
-
-# -----------------------------
-# Agente IA (new section)
-# -----------------------------
-elif selected == "Agente IA":
-    st.header("💬 Agente de Análisis IA (ChivoBot - Conectado a Gemini)")
-    st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega. El análisis se realiza usando el modelo **Gemini 2.5 Flash** sobre una muestra de tus datos.")
-    
-    df_ent = load_table('entregas')
-
-    if df_ent.empty:
-        st.warning("⚠️ No hay datos de entregas cargados para realizar análisis.")
-        st.stop()
-
-    # Data preparation for AI analysis
-    df = df_ent.copy()
-    
-    # Area de entrada de la pregunta del usuario
-    user_query = st.text_area("Escribe tu pregunta aquí (ej: '¿Cuál es el retraso promedio del repartidor Mario?')", height=100)
-    
-    if st.button("Obtener Respuesta IA"):
-        if user_query:
-            with st.spinner("Conectando con Gemini y analizando datos..."):
-                # Llamar a la función de análisis de Gemini
-                ai_response = run_ai_analysis_gemini(df, user_query)
-                
-                st.success("🤖 Respuesta de ChivoBot:")
-                st.markdown(ai_response)
-        else:
-            st.error("Por favor, escribe una pregunta para el análisis.")
-
-# -----------------------------
-# Borrar datos
-# -----------------------------
-elif selected == "Borrar Datos":
-    st.header("🗑️ Borrar datos")
-    st.warning("Esto eliminará tablas: clientes, ubicaciones, entregas")
-    if st.button("Borrar TODO"):
-        try:
-            clear_table('clientes'); clear_table('ubicaciones'); clear_table('entregas')
-            st.success("Tablas borradas.")
-            st.cache_data.clear()
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-# EOF
+                        st.info(f"🔴
