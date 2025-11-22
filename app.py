@@ -54,24 +54,43 @@ def _normalize_name(col: str) -> str:
 
 def normalize_columns_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [_normalize_name(c) for c in df.columns]
-    # map common names
+    
+    # Mapa de nombres comunes para unificar columnas clave
     rename_map = {
         'ubicacion': 'nombre','ubicaciones':'nombre','ubicacion_nombre':'nombre','cliente':'nombre','nombre_cliente':'nombre',
         'latitud':'lat','latitude':'lat','y':'lat',
         'longitud':'lon','longitude':'lon','lng':'lon','x':'lon','long':'lon',
         'orden':'orden_gestion','id':'orden_gestion'
     }
-    for k, v in rename_map.items():
-        if k in df.columns and v not in df.columns:
-            df.rename(columns={k:v}, inplace=True)
+    
+    final_names = []
+    seen_names = {}
+    
+    for col in df.columns:
+        normalized_name = _normalize_name(col)
+        
+        # 1. Aplicar mapeo de nombres (ej: 'latitud' -> 'lat')
+        if normalized_name in rename_map:
+            normalized_name = rename_map[normalized_name]
+            
+        # 2. Resolución de duplicados (Añadir contador si el nombre ya existe)
+        name = normalized_name
+        if name in seen_names:
+            seen_names[name] += 1
+            name = f"{name}_{seen_names[name]}"
+        else:
+            seen_names[name] = 0
+            
+        final_names.append(name)
+        
+    df.columns = final_names
     return df
 
 @st.cache_data(ttl=300)
 def read_csv_cached(uploaded_file, delimiter=','):
     """
     Try multiple encodings and return a pandas DataFrame; cached.
-    Accepts either a path (str) or a file-like object from Streamlit uploader.
+    Accepts a file-like object from Streamlit uploader.
     """
     encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
     
