@@ -1,8 +1,6 @@
-# app.py - ChivoFast Dashboard (Optimized)
 import os
 import streamlit as st
 import pandas as pd
-import numpy as np
 from sqlalchemy import create_engine, text
 import plotly.express as px
 import folium
@@ -16,12 +14,11 @@ from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
 from google import genai # Importación de la librería de Google GenAI
+import numpy as np 
 
 # ----------------------------
-# Config / sample file paths (AJUSTADO: RUTAS DE EJEMPLO ELIMINADAS)
-# ----------------------------
-
 # Database default (SQLite for portability)
+# ----------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
@@ -40,7 +37,7 @@ if GEMINI_API_KEY:
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
 st.set_page_config(page_title="ChivoFast — Optimized Dashboard", layout="wide")
-st.title("📦 ChivoFast — Dashboard (Optimized)")
+st.title("📦 ChivoFast — Optimized Dashboard")
 
 # -----------------------------
 # Utilities
@@ -201,12 +198,12 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     # Convertir el DataFrame relevante a formato de texto para la IA
     data_context = df_sample_context.to_markdown(index=False)
     
-    # 2. Construir el Prompt Estructurado
+    # 2. Construir el Prompt Estructurado (ESTRATEGIA ABIERTA)
     system_instruction = (
         "Eres un Agente de Análisis Logístico experto llamado ChivoBot. Tu función es analizar el desempeño "
-        "de las entregas basándote SÓLO en la tabla de datos que se te proporciona y responder directamente la pregunta del usuario. "
-        "Calcula promedios, máximos o mínimos y sé conciso. Si no encuentras la respuesta en los datos de la muestra, "
-        "indica que la información no es concluyente o no está disponible en la muestra actual."
+        "de las entregas basándote en la tabla de datos que se te proporciona, pero también DEBES usar tu "
+        "amplio conocimiento en logística para proveer un contexto y análisis más profundo. "
+        "Si la respuesta requiere una métrica simple, calcula el promedio o la cuenta, pero siempre ofrece una respuesta completa."
     )
     
     prompt = f"""
@@ -214,7 +211,7 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     {data_context}
     --- FIN DE CONTEXTO ---
     
-    Basado en el contexto de la tabla y tu rol como Agente Logístico:
+    Analiza la tabla y provee una respuesta completa a la pregunta.
     PREGUNTA DEL USUARIO: {query}
     """
     
@@ -326,7 +323,7 @@ if selected == "Ver Datos":
                 
                 st.success('Pedidos añadidos a entregas.')
                 st.cache_data.clear()
-        
+
 # -----------------------------
 # Clientes view
 # -----------------------------
@@ -475,6 +472,12 @@ elif selected == "Pedidos":
             
             # Nota: Al usar "append" en la BD, la tabla debe tener las columnas que se insertan.
             # Aquí asumimos que la tabla 'entregas' ya fue creada con el esquema completo.
+            
+            # Verificar si la tabla existe y forzar la adición de la columna si es necesario
+            # (Aunque esto debería manejarse en la sección "Ver Datos", se agrega aquí para seguridad)
+            if not check_table_exists_local('entregas'):
+                st.warning("La tabla de entregas se recreará con el esquema completo.")
+                
             nueva = pd.DataFrame([{
                 "orden_gestion": orden_final,
                 "fecha": datetime.now(),
@@ -694,7 +697,7 @@ elif selected == "Seguimiento":
                         progreso = 1 - (tiempo_restante_segundos / (tiempo_predicho_min * 60))
                         total_segundos = int(tiempo_restante_segundos)
                         minutos = (total_segundos % 3600) // 60
-                        segundos = total_segundos % 60
+                        segundos = (total_segundos % 60)
                         tiempo_restante_str = f"{minutos:02d}m {segundos:02d}s"
                         estado_progreso = "En Curso"
                         color_progreso = "blue"
