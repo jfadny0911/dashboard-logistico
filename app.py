@@ -1,4 +1,3 @@
-# app.py - ChivoFast Dashboard (Optimized)
 import os
 import streamlit as st
 import pandas as pd
@@ -9,10 +8,10 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap, MarkerCluster
 from streamlit_option_menu import option_menu
-from datetime import datetime, timedelta
 import random
 from io import StringIO
 import re
+from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
 from google import genai 
@@ -24,7 +23,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-# ADVERTENCIA: DEBES REEMPLAZAR ESTA CLAVE POR UNA NUEVA Y VÁLIDA
 GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
 
 # Inicialización del Cliente Gemini
@@ -38,8 +36,56 @@ if GEMINI_API_KEY:
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
+# ------------------------------------------------------
+# 🎨 CSS PARA ESTILOS MODERNOS (AZUL Y BLANCO)
+# ------------------------------------------------------
+CUSTOM_BLUE_CSS = """
+<style>
+/* 1. Estilo para el contenedor principal de la aplicación */
+.main {
+    background-color: var(--background-color, #ffffff); /* Respeta el modo claro/oscuro de Streamlit */
+    color: var(--text-color, #101010);
+}
+
+/* 2. Estilo para la barra de progreso (uniforme azul) */
+.stProgress > div > div > div > div {
+    background-color: #007bff; /* Azul primario */
+    border-radius: 5px;
+}
+
+/* 3. Estilo para los títulos (subheaders) */
+h2 {
+    color: #004080; /* Azul oscuro */
+    border-bottom: 2px solid #007bff;
+    padding-bottom: 5px;
+    margin-top: 20px;
+}
+
+/* 4. Estilo para las métricas (tarjetas de seguimiento) */
+div[data-testid="stMetric"] {
+    background-color: var(--secondary-background-color, #f8f8f8); 
+    border-radius: 10px;
+    padding: 10px 15px;
+    border: 1px solid #e0e0e0;
+    box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+/* 5. Estilo para el botón de entrega (azul primario) */
+.stButton button {
+    border-radius: 8px;
+    border: 1px solid #007bff;
+    color: white;
+    background-color: #007bff;
+}
+
+</style>
+"""
+# ------------------------------------------------------
+
 st.set_page_config(page_title="ChivoFast — Optimized Dashboard", layout="wide")
-st.title("📦 ChivoFast — Optimized Dashboard")
+# INYECCIÓN DEL CSS EN EL NIVEL SUPERIOR
+st.markdown(CUSTOM_BLUE_CSS, unsafe_allow_html=True)
+st.title("📦 ChivoFast — Dashboard (Optimized)")
 
 # -----------------------------
 # Utilities
@@ -670,18 +716,23 @@ elif selected == "Seguimiento":
             # --- Botón de entrega masiva ---
             if not df_merged.empty:
                 active_statuses_list = df_merged['estado'].unique().tolist()
-                safe_statuses = [f"'{s.replace("'", "''")}'" for s in active_statuses_list]
-                status_list_sql = ", ".join(safe_statuses)
                 
                 if st.button(f"✅ Marcar las {len(df_merged)} rutas activas como Entregadas"):
                     try:
-                        with engine.connect() as conn:
-                            update_query = text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion IN ({', '.join([f"'{o}'" for o in df_merged['orden_gestion'].tolist()])})")
-                            conn.execute(update_query)
-                            conn.commit()
-                        st.success(f"¡{len(df_merged)} rutas marcadas como Entregadas!")
-                        st.cache_data.clear()
-                        st.rerun()
+                        # Obtenemos los IDs de las órdenes que se van a actualizar
+                        orders_to_update = [f"'{o}'" for o in df_merged['orden_gestion'].tolist() if pd.notna(o)]
+                        
+                        if orders_to_update:
+                             with engine.connect() as conn:
+                                # Utilizamos los IDs de las órdenes específicas para la actualización
+                                update_query = text(f"UPDATE entregas SET estado='Entregado' WHERE orden_gestion IN ({', '.join(orders_to_update)})")
+                                conn.execute(update_query)
+                                conn.commit()
+                             st.success(f"¡{len(df_merged)} rutas marcadas como Entregadas!")
+                             st.cache_data.clear()
+                             st.rerun()
+                        else:
+                             st.warning("No se encontraron órdenes válidas para actualizar.")
                     except Exception as e:
                         st.error(f"Error al marcar entregas masivas: {e}")
                 st.markdown("---")
@@ -775,7 +826,7 @@ elif selected == "Seguimiento":
                         if st.button(f"Marcar Entregado #{row.get('orden_gestion')}", key=f"ent_{row.get('orden_gestion')}"):
                             try:
                                 with engine.connect() as conn:
-                                    # Usar parameterized query para evitar errores de SQL y seguridad
+                                    # Corregido: Usamos parameterized query para evitar errores de SQL y seguridad
                                     conn.execute(
                                         text("UPDATE entregas SET estado='Entregado' WHERE orden_gestion=:ord"),
                                         {"ord": str(row.get('orden_gestion'))}
