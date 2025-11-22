@@ -511,7 +511,15 @@ elif selected == "Asignación":
         cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
         st.dataframe(pendientes[cols_show].head(200))
         
-        sel_ord = st.selectbox("Selecciona la Orden para Asignar e Iniciar Ruta", options=pendientes['orden_gestion'].tolist() if not pendientes.empty else [])
+        # CAMBIO SOLICITADO: Digitar el ID de la orden
+        default_orders = pendientes['orden_gestion'].tolist() if not pendientes.empty else []
+        sel_ord = st.text_input("Digita el ID de la Orden a Asignar", value=default_orders[0] if default_orders else "")
+        
+        # Validación para asegurar que la orden exista en la lista de pendientes
+        if sel_ord and sel_ord not in pendientes['orden_gestion'].values:
+            st.warning(f"La orden {sel_ord} no está en estado Pendiente/Asignado.")
+            sel_ord = None
+
         sel_rep = st.selectbox("Repartidor", options=REPARTIDORES)
         
         # Botón Asignar (Activa la ruta)
@@ -535,7 +543,7 @@ elif selected == "Asignación":
 # KPIs (optimized)
 # -----------------------------
 elif selected == "KPIs":
-    st.header("📊 KPIs (Optimized)")
+    st.header("📊 KPI - DASHBOARD")
     df_ent = load_table('entregas')
     
     # 1. Base de datos para KPIs: Entregas
@@ -643,7 +651,8 @@ elif selected == "Seguimiento":
         df_ent = normalize_columns_df(df_ent.copy())
         # Definición de estados activos (usado para mostrar y para el botón masivo)
         active_statuses_regex = 'activa|en curso|enprogreso|asignado'
-        activos = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains(active_statuses_regex, na=False)]
+        # Usamos .drop_duplicates(subset=['orden_gestion']) para corregir el duplicado visualmente.
+        activos = df_ent[df_ent.get('estado','').astype(str).str.lower().str.contains(active_statuses_regex, na=False)].drop_duplicates(subset=['orden_gestion'], keep='first')
         
         # Merge coordinates from ubicaciones table (RESTO DEL CÓDIGO DE SEGUIMIENTO)
         df_merged = pd.DataFrame()
@@ -656,6 +665,7 @@ elif selected == "Seguimiento":
              # Attempt merge on common name columns ('nombre' in ubicaciones and 'nombre' or similar in entregas)
              join_key = find_col(activos, ['nombre','ubicacion'])
              if join_key and 'nombre' in df_ubic.columns:
+                 # Se usa la merge para traer coordenadas
                  df_merged = pd.merge(activos, df_ubic[['nombre','lat','lon']], left_on=join_key, right_on='nombre', how='left', suffixes=('_ent','_ubic'))
              else:
                  df_merged = activos
@@ -668,6 +678,7 @@ elif selected == "Seguimiento":
         else:
             # --- Botón de entrega masiva ---
             if not df_merged.empty:
+                active_statuses_list = df_merged['estado'].unique().tolist()
                 
                 if st.button(f"✅ Marcar las {len(df_merged)} rutas activas como Entregadas"):
                     try:
@@ -807,7 +818,7 @@ elif selected == "Seguimiento":
 # Agente IA (new section)
 # -----------------------------
 elif selected == "Agente IA":
-    st.header("💬 Agente de Análisis IA (ChivoBot - Conectado a Gemini)")
+    st.header("💬 Agente de Análisis IA (ChivoBot)")
     st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega. El análisis se realiza usando el modelo **Gemini 2.5 Flash** sobre una muestra de tus datos.")
     
     df_ent = load_table('entregas')
