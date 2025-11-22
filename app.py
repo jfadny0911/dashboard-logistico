@@ -25,7 +25,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 # CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
+GEMINI_API_KEY = "AIzaSyDgOVmirsUOkcbocawuAIbs0jjLiWqM5Ww" 
 
 # Inicialización del Cliente Gemini
 client = None
