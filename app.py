@@ -14,8 +14,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai 
-from openai import OpenAI # Importación de la librería de OpenAI
+from google import genai # Importación de la librería de Google GenAI
 
 # ----------------------------
 # Database default (SQLite for portability)
@@ -23,27 +22,18 @@ from openai import OpenAI # Importación de la librería de OpenAI
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
-# --- CLAVES API ---
-# Reemplaza 'TU_CLAVE_OPENAI' con tu clave real.
+# CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
 GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
-OPENAI_API_KEY = "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" 
 
 # Inicialización de Clientes
 client_gemini = None
 client_openai = None
-
-if GEMINI_API_KEY and GEMINI_API_KEY != "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8":
+if GEMINI_API_KEY:
     try:
         client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-    except Exception:
-        st.sidebar.error("Gemini no conectado. Revisa clave.")
-
-if OPENAI_API_KEY and OPENAI_API_KEY != "TU_CLAVE_OPENAI":
-    try:
-        client_openai = OpenAI(api_key=OPENAI_API_KEY)
-    except Exception:
-        st.sidebar.error("OpenAI no conectado. Revisa clave.")
-
+    except Exception as e:
+        st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
+        client_gemini = None
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
@@ -185,19 +175,24 @@ def haversine_vectorized(lat1, lon1, lat2, lon2):
 # 🤖 LÓGICA DEL AGENTE DE ANÁLISIS IA (CONEXIÓN GEMINI/OPENAI)
 # -------------------------------------------------------------------
 
-def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
-    # ... (Lógica de Gemini) ...
-    global client_gemini
-    
-    if not client_gemini:
+def run_ai_analysis_gemini(client_obj, df_input: pd.DataFrame, query: str):
+    """
+    Se conecta a Gemini para analizar el DataFrame y la consulta del usuario.
+    """
+    if not client_obj:
         return "⚠️ Error de Conexión: El cliente Gemini no está inicializado. Verifica tu clave API."
 
+    # 1. Preparar la consulta y limpiar los datos para el prompt
     df_sample = df_input.sample(min(100, len(df_input)), random_state=42) 
+    
+    # Seleccionar columnas clave para el análisis
     cols_to_analyze = ['orden_gestion', 'repartidor', 'tiempo_entrega', 'retraso', 'clima', 'trafico', 'departamento', 'tipo_pedido']
+    
     valid_cols = [col for col in cols_to_analyze if col in df_sample.columns]
     df_sample_context = df_sample[valid_cols]
     data_context = df_sample_context.to_markdown(index=False)
     
+    # 2. Construir el Prompt Estructurado (ESTRATEGIA ABIERTA)
     system_instruction = (
         "Eres un Agente de Análisis Logístico experto llamado ChivoBot. Tu función es analizar el desempeño "
         "de las entregas basándote en la tabla de datos que se te proporciona, pero también DEBES usar tu "
@@ -215,11 +210,13 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     """
     
     try:
-        response = client_gemini.models.generate_content(
-            model='gemini-2.5-flash',
+        # 3. Enviar la solicitud a Gemini
+        response = client_obj.models.generate_content(
+            model='gemini-2.5-flash', # Modelo rápido
             contents=prompt,
             config={"system_instruction": system_instruction}
         )
+        
         return response.text
         
     except Exception as e:
@@ -874,7 +871,7 @@ elif selected == "Agente IA":
     
     # Selector de modelo (Gemini vs OpenAI)
     model_options = {}
-    if client:
+    if client_gemini:
         model_options['Gemini (Análisis de datos)'] = 'gemini'
     if client_openai:
         model_options['ChatGPT (Contexto y resumen)'] = 'openai'
@@ -892,9 +889,9 @@ elif selected == "Agente IA":
                 model_key = model_options[selected_model]
                 
                 if model_key == 'gemini':
-                    ai_response = run_ai_analysis_gemini(df, user_query)
+                    ai_response = run_ai_analysis_gemini(client_gemini, df, user_query)
                 elif model_key == 'openai':
-                    ai_response = run_ai_analysis_openai(df, user_query)
+                    ai_response = run_ai_analysis_openai(df, user_query) # Asume que la función OpenAI usa global client o es manejada externamente
                 
                 st.success("🤖 Respuesta de ChivoBot:")
                 st.markdown(ai_response)
