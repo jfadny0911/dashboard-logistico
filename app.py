@@ -14,7 +14,8 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai # Importación de la librería de Google GenAI
+from google import genai 
+from openai import OpenAI # Importación de la librería de OpenAI
 
 # ----------------------------
 # Database default (SQLite for portability)
@@ -22,18 +23,27 @@ from google import genai # Importación de la librería de Google GenAI
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
-# CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
+# --- CLAVES API ---
+# ¡ADVERTENCIA! Esta clave fue expuesta y DEBE ser reemplazada por una nueva.
 GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
+OPENAI_API_KEY = "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" 
 
 # Inicialización de Clientes
 client_gemini = None
 client_openai = None
+
 if GEMINI_API_KEY:
     try:
         client_gemini = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
-        st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
-        client_gemini = None
+        st.sidebar.error("Gemini no conectado. Revisa clave.")
+
+if OPENAI_API_KEY and OPENAI_API_KEY != "TU_CLAVE_OPENAI":
+    try:
+        client_openai = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception:
+        st.sidebar.error("OpenAI no conectado. Revisa clave.")
+
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
 
@@ -855,7 +865,7 @@ elif selected == "Seguimiento":
 # -----------------------------
 elif selected == "Agente IA":
     st.header("💬 Agente de Análisis IA (ChivoBot)")
-    st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega. El análisis se realiza usando el modelo **Gemini 2.5 Flash** sobre una muestra de tus datos.")
+    st.markdown("Pregunta sobre el desempeño logístico, repartidores, o zonas de entrega. El análisis se realiza usando los modelos disponibles sobre una muestra de tus datos.")
     
     df_ent = load_table('entregas')
 
@@ -865,9 +875,6 @@ elif selected == "Agente IA":
 
     # Data preparation for AI analysis
     df = df_ent.copy()
-    
-    # Area de entrada de la pregunta del usuario
-    user_query = st.text_area("Escribe tu pregunta aquí (ej: '¿Cuál es el retraso promedio del repartidor Mario?')", height=100)
     
     # Selector de modelo (Gemini vs OpenAI)
     model_options = {}
@@ -882,9 +889,12 @@ elif selected == "Agente IA":
     
     selected_model = st.selectbox("Seleccionar Motor IA", options=list(model_options.keys()))
     
+    # Area de entrada de la pregunta del usuario
+    user_query = st.text_area("Escribe tu pregunta aquí (ej: '¿Cuál es el retraso promedio del repartidor Mario?')", height=100)
+    
     if st.button("Obtener Respuesta IA"):
         if user_query:
-            with st.spinner("Conectando y analizando datos..."):
+            with st.spinner(f"Conectando con {selected_model} y analizando datos..."):
                 
                 model_key = model_options[selected_model]
                 
