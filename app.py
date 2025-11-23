@@ -26,7 +26,7 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} i
 # --- CLAVES API ---
 # ¡ADVERTENCIA! Esta clave fue expuesta y DEBE ser reemplazada por una nueva.
 GEMINI_API_KEY = "AIzaSyB4Pl0C99b5zOEvplcoBgGzS4VnmLMLIi8" 
-OPENAI_API_KEY = "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" 
+OPENAI_API_KEY = "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" 
 
 # Inicialización de Clientes
 client_gemini = None
