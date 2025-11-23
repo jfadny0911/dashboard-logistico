@@ -8,3 +8,4 @@ sqlalchemy
 google-genai
 streamlit-option-menu
 tabulate  
+openai
