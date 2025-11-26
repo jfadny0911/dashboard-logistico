@@ -830,16 +830,7 @@ elif selected == "Agente IA":
     # Area de entrada de la pregunta del usuario
     user_query = st.text_area("Escribe tu pregunta aquí (ej: '¿Cuál es el retraso promedio del repartidor Mario?')", height=100)
     
-    # Selector de modelo (Gemini vs OpenAI)
-    model_options = {}
-    if client:
-        model_options['Gemini (Análisis de datos)'] = 'gemini'
     
-    if not model_options:
-         st.error("No hay clientes de IA conectados. Revisa las claves API en la configuración.")
-         st.stop()
-    
-    selected_model = st.selectbox("Seleccionar Motor IA", options=list(model_options.keys()))
     
     if st.button("Obtener Respuesta IA"):
         if user_query:
