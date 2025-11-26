@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-from google import genai # Importación de la librería de Google GenAI
+from google import genai 
 
 # ----------------------------
 # Database default (SQLite for portability)
@@ -22,16 +22,18 @@ from google import genai # Importación de la librería de Google GenAI
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chivofast_local.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
-# CLAVE GEMINI (INTEGRADA DIRECTAMENTE)
-GEMINI_API_KEY = "AIzaSyCSM1BsmBMsK9vC4xELixguQtSk7OUy1EM" 
+# --- CLAVES API ---
+# Se lee de forma segura desde las variables de entorno/Secrets de Streamlit
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
 # Inicialización del Cliente Gemini
 client = None
 if GEMINI_API_KEY:
     try:
+        # Se usa la clave leída de forma segura
         client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
-        st.error(f"Error al inicializar el cliente Gemini. Revisa la clave API. Detalle: {e}")
+        # st.error no debe usarse en este nivel, solo una bandera
         client = None
 
 REPARTIDORES = ["Mario", "Luigi", "Princesa", "Yoshi", "Toad"]
@@ -174,13 +176,11 @@ def haversine_vectorized(lat1, lon1, lat2, lon2):
 # 🤖 LÓGICA DEL AGENTE DE ANÁLISIS IA (CON CONEXIÓN A GEMINI)
 # -------------------------------------------------------------------
 
-def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
+def run_ai_analysis_gemini(client_obj, df_input: pd.DataFrame, query: str):
     """
     Se conecta a Gemini para analizar el DataFrame y la consulta del usuario.
     """
-    global client
-    
-    if not client:
+    if not client_obj:
         return "⚠️ Error de Conexión: El cliente Gemini no está inicializado. Verifica tu clave API."
 
     # 1. Preparar la consulta y limpiar los datos para el prompt
@@ -191,7 +191,6 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     # Seleccionar columnas clave para el análisis
     cols_to_analyze = ['orden_gestion', 'repartidor', 'tiempo_entrega', 'retraso', 'clima', 'trafico', 'departamento', 'tipo_pedido']
     
-    # Asegurar que las columnas existan antes de seleccionarlas
     valid_cols = [col for col in cols_to_analyze if col in df_sample.columns]
     df_sample_context = df_sample[valid_cols]
     
@@ -217,7 +216,7 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
     
     try:
         # 3. Enviar la solicitud a Gemini
-        response = client.models.generate_content(
+        response = client_obj.models.generate_content(
             model='gemini-2.5-flash', # Modelo rápido
             contents=prompt,
             config={"system_instruction": system_instruction}
@@ -226,7 +225,7 @@ def run_ai_analysis_gemini(df_input: pd.DataFrame, query: str):
         return response.text
         
     except Exception as e:
-        return f"❌ Error de API: No se pudo conectar o procesar la solicitud. Detalle: {e}"
+        return f"❌ Error de API: No se pudo conectar o procesar la solicitud con Gemini. Detalle: {e}"
 
 # -----------------------------
 # Sidebar
@@ -498,14 +497,14 @@ elif selected == "Asignación":
         pendientes = df_ent[df_ent.get('estado','').astype(str).str.lower().isin(['pendiente', 'asignado', 'pendiente_asignado'])]
         st.subheader("Pedidos Pendientes de Asignar/Iniciar")
         
-        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
-        st.dataframe(pendientes[cols_show].head(200))
-        
         # MOSTRAR ÓRDENES DISPONIBLES
         available_orders = pendientes['orden_gestion'].tolist() if not pendientes.empty else []
         if available_orders:
-            # FIX: Asegurarse de que los elementos sean string antes de join
+            # FIX: Convertir a string antes de join para evitar TypeError
             st.info(f"Órdenes disponibles: **{', '.join(map(str, available_orders))}**")
+        
+        cols_show = [c for c in ['orden_gestion','nombre','municipio','departamento', 'prioridad', 'repartidor', 'estado'] if c in pendientes.columns]
+        st.dataframe(pendientes[cols_show].head(200))
         
         # CAMBIO SOLICITADO: Digitar el ID de la orden
         sel_ord_input = st.text_input("Digita el ID de la Orden a Asignar", value=available_orders[0] if available_orders else "")
@@ -831,11 +830,25 @@ elif selected == "Agente IA":
     # Area de entrada de la pregunta del usuario
     user_query = st.text_area("Escribe tu pregunta aquí (ej: '¿Cuál es el retraso promedio del repartidor Mario?')", height=100)
     
+    # Selector de modelo (Gemini vs OpenAI)
+    model_options = {}
+    if client:
+        model_options['Gemini (Análisis de datos)'] = 'gemini'
+    
+    if not model_options:
+         st.error("No hay clientes de IA conectados. Revisa las claves API en la configuración.")
+         st.stop()
+    
+    selected_model = st.selectbox("Seleccionar Motor IA", options=list(model_options.keys()))
+    
     if st.button("Obtener Respuesta IA"):
         if user_query:
             with st.spinner("Conectando con Gemini y analizando datos..."):
-                # Llamar a la función de análisis de Gemini
-                ai_response = run_ai_analysis_gemini(df, user_query)
+                
+                model_key = model_options[selected_model]
+                
+                if model_key == 'gemini':
+                    ai_response = run_ai_analysis_gemini(client, df, user_query)
                 
                 st.success("🤖 Respuesta de ChivoBot:")
                 st.markdown(ai_response)
