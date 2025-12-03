@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta
 import math
 from typing import Optional, Tuple
-# Asegúrate de tener instalado 'google-genai' si necesitas el Agente IA
+# Intentar importar google.genai, manejar la excepción si no está instalado
 try:
     from google import genai 
     GEMINI_AVAILABLE = True
@@ -338,6 +338,12 @@ if es_gerencia:
                     if 'prioridad' not in df_ped.columns:
                            df_ped['prioridad'] = 'Normal' # Añade columna 'prioridad' con valor por defecto
                            
+                    # --- AÑADIR COLUMNAS NUEVAS PARA BITÁCORA ---
+                    if 'comentario_bitacora' not in df_ped.columns:
+                        df_ped['comentario_bitacora'] = None
+                    if 'fecha_finalizacion' not in df_ped.columns:
+                        df_ped['fecha_finalizacion'] = None
+                           
                     # Borrar la tabla temporalmente para asegurar que el esquema 'prioridad' esté incluido
                     if check_table_exists_local('entregas'):
                          clear_table('entregas')
@@ -495,9 +501,12 @@ if es_gerencia:
                     "lat": float(lat) if lat else None,
                     "lon": float(lon) if lon else None,
                     "tipo_pedido": tipo,
-                    "prioridad": prioridad, # El valor que causaba el error
+                    "prioridad": prioridad, 
                     "estado": "Pendiente",
-                    "repartidor": repartidor
+                    "repartidor": repartidor,
+                    # Columnas nuevas para la bitácora
+                    "comentario_bitacora": None,
+                    "fecha_finalizacion": None
                 }])
                 with engine.connect() as conn:
                     nueva.to_sql('entregas', conn, if_exists='append', index=False)
@@ -904,6 +913,7 @@ elif not es_gerencia:
              st.stop()
             
         # Filtrar solo las entregas para el repartidor actual y que no hayan sido finalizadas
+        # Se incluyen las nuevas columnas para referencia visual
         entregas_rep = df_ent[
             (df_ent[col_rep].astype(str) == repartidor_actual) &
             (df_ent[col_estado].astype(str).str.lower().isin(['activa', 'asignado', 'pendiente', 'en curso', 'enprogreso']))
@@ -923,7 +933,7 @@ elif not es_gerencia:
                 'estado'
             ]
             
-            # Filtramos las columnas que realmente existen
+            # Filtramos las columnas que realmente existen y las mostramos primero
             final_cols = [c for c in cols_show if c in entregas_rep.columns] + [c for c in entregas_rep.columns if c not in cols_show]
             
             # Mostrar las rutas asignadas (las "rutas establecidas por gerencia")
@@ -972,6 +982,7 @@ elif not es_gerencia:
             )
             
             # Campo de comentario
+            # Nota: El comentario de la Bitácora será crucial para la columna 'comentario_bitacora'
             comentario = st.text_area("Comentario (Razón de Cancelación/Anulación, detalles de Entrega)", height=100)
             
             submit_bitacora = st.form_submit_button("Guardar Registro de Bitácora")
@@ -989,8 +1000,10 @@ elif not es_gerencia:
                     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     
                     # 2. Actualización de la BD
+                    # IMPORTANTE: Asegúrate de que las columnas 'comentario_bitacora' y 'fecha_finalizacion' 
+                    # existan en tu DB. Si no existen, usa la opción 'Borrar Datos' como Gerencia y vuelve a subir los CSV.
                     with engine.connect() as conn:
-                        # Actualizar estado, tiempo_entrega (asumiendo que es el tiempo total o finalización), comentario
+                        # Usar parameterized query
                         conn.execute(
                             text("""
                                  UPDATE entregas 
@@ -1015,3 +1028,4 @@ elif not es_gerencia:
                     
                 except Exception as e:
                     st.error(f"Error al guardar la bitácora: {e}")
+                    st.error("Consejo: Si el error es 'no such column', ve a 'Borrar Datos' como Gerencia para recrear la tabla con todas las columnas nuevas.")
